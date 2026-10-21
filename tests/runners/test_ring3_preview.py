@@ -16,6 +16,8 @@ parser=argparse.ArgumentParser()
 parser.add_argument('--fault',action='store_true')
 parser.add_argument('--page-fault',action='store_true')
 parser.add_argument('--nx-fault',action='store_true')
+parser.add_argument('--data-image',type=Path,help='Explicit, file-backed Winux FAT volume for UEFI storage installation')
+parser.add_argument('--expect-existing',action='store_true')
 parser.add_argument('--iso',type=Path,help='Override ISO under the project root or provide an absolute path')
 parser.add_argument('--result-tag',default='console-wrapper-fls-candidate',help='Safe output prefix')
 parser.add_argument('--check-nt-missing',action='store_true',help='Check bounded unknown NT syscall trace')
@@ -39,6 +41,10 @@ command=[str(qemu),'-machine','q35','-accel','tcg','-m','256M','-smp','1',
  '-cdrom',str(iso),'-boot','d','-display','none','-nic','none','-no-reboot',
  '-serial',f'tcp:127.0.0.1:{serial_port},server=on,wait=off',
  '-qmp',f'tcp:127.0.0.1:{qmp_port},server=on,wait=off']
+if args.data_image:
+    data_image=(root/args.data_image) if not args.data_image.is_absolute() else args.data_image
+    assert data_image.is_file() and data_image.suffix.lower()=='.img' and (root/'build') in data_image.resolve().parents
+    command.extend(['-drive',f'if=virtio,format=raw,file={data_image}'])
 output='';checks=[];start=time.monotonic();failure=None
 decoder=codecs.getincrementaldecoder('utf-8')('replace')
 def connect(port):
@@ -74,6 +80,12 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
         def send(line,expected):
             before=len(output);serial.sendall((line+'\r').encode());return wait_for(expected,before)
         wait_for('KERNEL: CONSOLE_READY',timeout=45)
+        if args.data_image:
+            expected='WINUX_STORAGE: EXISTING' if args.expect_existing else 'WINUX_STORAGE: INSTALLED'
+            assert expected in output, output[:2000]
+            status=send('storage-status','accounts=SETUP_REQUIRED')
+            assert 'installed=1' in status and 'failed=0' in status and 'accounts=SETUP_REQUIRED' in status
+            checks.append('UEFI FAT system directories installed or reused only on Winux-tagged volume')
         assert 'AFTER_EXIT_BOOT_SERVICES' in output and '[OK] Reserved page allocator' in output
         checks.append('post-firmware console and allocator self-test')
         assert 'KERNEL: OWN_CR3_ACTIVE WP NX' in output
