@@ -39,6 +39,33 @@ outro escalonador, outro pool de memória ou outro gerenciador de handles.
 Não é um relógio de tempo civil, sincronização NTP nem serviço de rede.
 É um monitor de ticks reais com um consumidor legítimo de syscall.
 
+## IPC e supervisão de falhas reais
+
+- ABI nativa WX_NATIVE_IPC_SEND=5: o processo clockd emite o tick PIT
+  por syscall, informando o destinatário (PID 402) e um valor de 64 bits.
+  O emissor NÃO escolhe sua identidade; o kernel usa wx_current_service_pid,
+  definido apenas quando o processo CPL3 correspondente está ativo.
+- ABI WX_NATIVE_IPC_RECEIVE=6: memd consulta sua caixa limitada (1 mensagem).
+  O valor recebido é armazenado na página CPL3 própria e observado em
+  services como last_ipc_tick, sent, received e backpressure.
+- A mailbox fica no registro de serviços existente, sem duplicar o
+  Process Manager. Se estiver ocupada, SEND retorna rejeição explícita.
+  Testes verificam destinatários inválidos e ausência de escalada de PID.
+- A supervisão observa serviços FAILED e reinicia apenas o processo
+  afetado, com no máximo 2 tentativas automáticas e um intervalo de
+  20 ticks após a falha. Não interrompe um serviço saudável.
+- Diagnóstico de fault isolation: svc fault memd grava instruções
+  propositadamente inválidas APENAS no código CPL3 de memd e o retoma.
+  O processador gera #PF real, o gate recupera para o kernel, marca
+  FAILED e o supervisor recompila/reinicia aquele processo. A flag
+  de erro não é simulada manualmente no terminal.
+
+Este teste com falha deliberada só está habilitado na ISO experimental e
+não deve ser executado contra programas ou dados pessoais. IPC não equivale
+a Named Pipes, RPC, LPC ou ALPC do Windows. Ainda não há dependências
+entre serviços (memd monitora memória mesmo sem clockd), filas grandes,
+mensagens com buffers nem direitos ACL completos.
+
 ## Terminal e processos observáveis
 
     ps
@@ -49,6 +76,7 @@ Não é um relógio de tempo civil, sincronização NTP nem serviço de rede.
     svc stop memd
     svc start memd
     svc restart memd
+    svc fault memd   # apenas diagnóstico experimental
 
 A saída de ps usa o estado corrente do processo CPL3 real, incluindo PID,
 CR3 e contador de quanta; ela não mostra a shell CPL0 como se fosse um
