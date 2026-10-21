@@ -172,6 +172,12 @@ static int pe_test(void) {
 #include "../process/address_space_preview.h"
 #ifdef WINUX_SCHED_PREVIEW
 #include "../process/scheduler_preview.h"
+#ifdef WINUX_PROC_MANAGER_PREVIEW
+#include "../process/process_manager_preview.h"
+#endif
+#ifdef WINUX_TIMER_PREEMPT_PREVIEW
+#include "../process/timer_preemption_preview.h"
+#endif
 #ifdef WINUX_SERVICE_PREVIEW
 #include "../process/service_manager_preview.h"
 #endif
@@ -291,6 +297,12 @@ static void command(char *line, unsigned depth) {
             print("\nVFS_READ_OK\n");
         }
     }
+#endif
+#ifdef WINUX_TIMER_PREEMPT_PREVIEW
+    else if(same(line,"preempt-test"))print(wx_timer_preemption_test()?"PREEMPT_TEST_OK\n":"PREEMPT_TEST_FAILED\n");
+#endif
+#ifdef WINUX_PROC_MANAGER_PREVIEW
+    else if(same(line,"process-test"))print(wx_process_manager_test()?"PROC_MANAGER_TEST_OK\n":"PROC_MANAGER_TEST_FAILED\n");
 #endif
     else if (same(line, "nt-missing"))nt_missing_report();
     else if (same(line, "nt-missing-reset")){nt_missing_reset();print("NT_MISSING_RESET_OK\n");}

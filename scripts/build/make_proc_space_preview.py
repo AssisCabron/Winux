@@ -2,9 +2,9 @@
 from pathlib import Path
 import hashlib,subprocess,json,io,contextlib,argparse
 cli=argparse.ArgumentParser()
-cli.add_argument("--experiment",choices=("proc_space","scheduler","integration"),default="proc_space")
+cli.add_argument("--experiment",choices=("proc_space","scheduler","integration","preemption"),default="proc_space")
 EXPERIMENT=cli.parse_args().experiment
-OUT_NAME={"proc_space":"proc-space-preview","scheduler":"scheduler-preview","integration":"foundation-preview"}[EXPERIMENT]
+OUT_NAME={"proc_space":"proc-space-preview","scheduler":"scheduler-preview","integration":"foundation-preview","preemption":"preemption-preview"}[EXPERIMENT]
 ROOT=Path(__file__).resolve().parents[2]
 OUT=ROOT/"build"/OUT_NAME
 OUT.mkdir(exist_ok=True,parents=True)
@@ -17,7 +17,7 @@ for f,v in GOLD.items():assert sha(ROOT/"build"/f)==v
 zig=ROOT/"tools"/"zig-x86_64-windows-0.14.1"/"zig.exe"
 efi=OUT/"BOOTX64-wrapper-fls.EFI"
 sources=[str(ROOT/"experiments"/EXPERIMENT/"boot.c")]
-if EXPERIMENT in ("scheduler","integration"):
+if EXPERIMENT in ("scheduler","integration","preemption"):
     # Standalone assembly owns the register and stack switch contract.
     asm=ROOT/"src"/"arch"/"x86_64"/"context_switch.S"
     obj=OUT/"context_switch.obj"

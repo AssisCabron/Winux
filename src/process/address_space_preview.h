@@ -17,10 +17,22 @@ typedef struct {
 static wx_address_space wx_spaces[WX_SPACE_COUNT];
 
 static int wx_space_make(wx_address_space *p,u32 pid,u32 exit_code) {
-    if(!p || !pg_ready)return 0;
-    p->root=pg_new();p->pdpt=pg_new();p->pd=pg_new();p->pt=pg_new();
+    if(!p || !pg_ready || p->root || p->code || p->stack)return 0;
+    /* User page tables have explicit ownership. pg_new() is used for
+     * permanent kernel mappings, not dynamically created processes. */
+    p->root=page_alloc();p->pdpt=page_alloc();
+    p->pd=page_alloc();p->pt=page_alloc();
     p->code=page_alloc();p->stack=page_alloc();
-    if(!p->root||!p->pdpt||!p->pd||!p->pt||!p->code||!p->stack)return 0;
+    if(!p->root||!p->pdpt||!p->pd||!p->pt||!p->code||!p->stack){
+        if(p->code)page_free(p->code);
+        if(p->stack)page_free(p->stack);
+        if(p->pt)page_free(p->pt);
+        if(p->pd)page_free(p->pd);
+        if(p->pdpt)page_free(p->pdpt);
+        if(p->root)page_free(p->root);
+        pg_zero(p,sizeof(*p));
+        return 0;
+    }
     p->pid=pid;p->exit_code=exit_code;
     const u64 *kernel_pdpt=(const u64*)(pg_root[0]&PG_MASK);
     /* Identity ranges remain supervisor-only; high user region gets its
@@ -55,6 +67,21 @@ static int wx_space_make(wx_address_space *p,u32 pid,u32 exit_code) {
 }
 static inline u64 wx_read_cr3(void){u64 v;__asm__ volatile("mov %%cr3,%0":"=r"(v));return v;}
 static inline void wx_load_cr3(u64 value){__asm__ volatile("mov %0,%%cr3"::"r"(value):"memory");}
+/* Fully reclaim a stopped CPL3 process: two user frames and four user
+ * page tables. MUST run on a supervisor stack after switching away
+ * from this process's root; never reclaim the currently active CR3. */
+static int wx_space_destroy(wx_address_space *p){
+    if(!p || !p->root || wx_read_cr3()==(u64)p->root || wx_active)return 0;
+    int ok=1;
+    if(p->code && !page_free(p->code))ok=0;
+    if(p->stack && !page_free(p->stack))ok=0;
+    if(p->pt && !page_free(p->pt))ok=0;
+    if(p->pd && !page_free(p->pd))ok=0;
+    if(p->pdpt && !page_free(p->pdpt))ok=0;
+    if(p->root && !page_free(p->root))ok=0;
+    pg_zero(p,sizeof(*p));
+    return ok;
+}
 static int wx_space_run(wx_address_space *p,u32 expected_pid,u32 expected_exit){
     if(!p||!p->root||wx_active)return 0;
     wx_load_cr3((u64)p->root);
@@ -89,14 +116,9 @@ static int wx_address_space_test(void){
         wx_load_cr3(old_cr3);
     }
     wx_load_cr3(old_cr3);
-    for(unsigned i=0;i<WX_SPACE_COUNT;i++){
-        if(wx_spaces[i].code)page_free(wx_spaces[i].code);
-        if(wx_spaces[i].stack)page_free(wx_spaces[i].stack);
-        pg_zero(&wx_spaces[i],sizeof(wx_spaces[i]));
-    }
-    /* No other table allocations may occur during this sequential test. */
-    for(u32 i=saved_used;i<pg_used;i++)pg_zero(pg_tables[i],4096);
-    pg_used=saved_used;
+    for(unsigned i=0;i<WX_SPACE_COUNT;i++)
+        if(wx_spaces[i].root && !wx_space_destroy(&wx_spaces[i]))ok=0;
+    if(pg_used!=saved_used)ok=0;
     if(ok)print("PROC_SPACE_OK: 2 independent CR3 roots, same VA different frames, CPL3 exits 21/42/21, resources restored\n");
     else print("PROC_SPACE_FAILED\n");
     return ok;

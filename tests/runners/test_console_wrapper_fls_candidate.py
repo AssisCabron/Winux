@@ -26,6 +26,8 @@ parser.add_argument('--check-scheduler',action='store_true',help='Verify real Wi
 parser.add_argument('--check-user-scheduler',action='store_true',help='Require two CPL3 process continuations to resume after native yield')
 parser.add_argument('--check-services',action='store_true',help='Verify resident CPL3 clockd autostart, scheduling, listing, stop and restart')
 parser.add_argument('--check-vfs',action='store_true',help='Verify FAT16 read-only mount, root listing and file contents')
+parser.add_argument('--check-preemption',action='store_true',help='Assert PIT IRQ0 interrupts two CPU-bound non-yielding CPL3 programs')
+parser.add_argument('--check-process-manager',action='store_true',help='Verify repeated process spawn, exit, resource reaping and free-page invariants')
 args=parser.parse_args()
 assert re.fullmatch(r'[a-zA-Z0-9-]{1,70}',args.result_tag), 'Invalid result tag'
 tag='page-fault' if args.page_fault else ('nx-fault' if args.nx_fault else ('fault' if args.fault else args.result_tag))
@@ -116,6 +118,20 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
             assert 'VFS_FAT16_OK:' in remount
             assert 'WINUX_FAT16_RUNTIME_READ_OK' in send('catdisk STATUS.TXT','VFS_READ_OK')
             checks.append('block device detach invalidates VFS mount and remount restores FAT16 file access')
+        if args.check_process_manager:
+            for cycle in range(2):
+                record=send('process-test','PROC_MANAGER_TEST_OK')
+                assert 'PROC_MANAGER_OK: 12 CPL3 process creates/runs/exits/reaps' in record
+                assert 'pool fully restored' in record
+            checks.append('24 independent CPL3 process launches with unique PIDs, per-process NT handles and complete physical/page-table reaping')
+        if args.check_preemption:
+            preempt_text=send('preempt-test','PREEMPT_TEST_OK')
+            assert 'PIT_PREEMPT_OK: IRQ32 forced two non-yielding CPL3 loops' in preempt_text
+            assert 'PIT_THREAD_STACKS_OK: separate privileged RSP0' in preempt_text
+            assert 'PIT_THREAD_FPU_OK: distinct CPL3 MXCSR values preserved' in preempt_text
+            match=re.search(r'PIT_PREEMPT_STATS: interrupts=(\d+) context_switches=(\d+)',preempt_text)
+            assert match and int(match.group(1))>=2 and int(match.group(2))==3
+            checks.append('hardware PIT IRQ32 forced two CPU-bound CPL3 programs to resume with their own saved contexts')
         if args.check_scheduler:
             for cycle in range(2):
                 sched_text=send('sched-test','SCHED_TEST_OK')

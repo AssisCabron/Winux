@@ -245,13 +245,9 @@ static int wx_scheduler_test(void){
         if(wx_sched_tasks[t].objects.slots[k].kind)ok=0;
 cleanup:
     wx_load_cr3(original_cr3);
-    for(unsigned i=0;i<WX_SPACE_COUNT;i++){
-        if(wx_spaces[i].code)page_free(wx_spaces[i].code);
-        if(wx_spaces[i].stack)page_free(wx_spaces[i].stack);
-        pg_zero(&wx_spaces[i],sizeof(wx_spaces[i]));
-    }
-    for(u32 i=pages_before;i<pg_used;i++)pg_zero(pg_tables[i],4096);
-    pg_used=pages_before;
+    for(unsigned i=0;i<WX_SPACE_COUNT;i++)
+        if(wx_spaces[i].root && !wx_space_destroy(&wx_spaces[i]))ok=0;
+    if(pg_used!=pages_before)ok=0;
     /* Only the scheduler kernel stack is live now. It is safe to scrub
      * finished/abandoned task stacks, saved GPRs and task-owned object tables.
      * Never free a stack while a CPU is still executing on it. */
