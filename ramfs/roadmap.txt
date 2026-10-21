@@ -1,0 +1,5 @@
+NOW: dedicated app stack, GS context, heap, TLS, environment and UTF-16.
+NEXT: own page tables and physical page allocator, process environment and CRT.
+THEN: isolated processes, DLL loading, resources and actual CMD dependencies.
+TARGET: original cmd.exe /d /c echo teste, then interactive commands and files.
+Windows applications and drivers require separate verified contracts.

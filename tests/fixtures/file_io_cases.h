@@ -1,0 +1,16 @@
+static const struct scenario cases[]={
+{"write-initial",1,7,0,0,{65,66,0,67,88,89,90}},
+{"read-eof",0,4,0,0,{0}},
+{"read-zero-eof",0,0,0,0,{0}},
+{"read-start",0,3,1,0,{0}},
+{"read-current",0,8,0,0,{0}},
+{"write-offset",1,2,1,2,{49,50}},
+{"read-current-after-write",0,4,0,0,{0}},
+{"read-final",0,16,1,0,{0}},
+{"read-zero-start",0,0,1,0,{0}},
+{"read-after-zero",0,2,0,0,{0}},
+{"write-zero-offset",1,0,1,1,{0}},
+{"read-after-zero-write",0,2,0,0,{0}},
+{"write-gap",1,1,1,10,{90}},
+{"read-gap",0,16,1,0,{0}},
+};

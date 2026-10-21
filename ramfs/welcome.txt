@@ -1,0 +1,5 @@
+Welcome to Winux 0.38.
+This is an original experimental kernel, running after firmware exit.
+Files in this volume are read-only and bundled when the ISO is built.
+Use help to list commands. Try run runtime.exe or run hello.exe.
+Only bundled Win32 contract tests run. The real CMD is not supported yet.

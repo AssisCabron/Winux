@@ -1,0 +1,86 @@
+
+# ==========================================
+# WINUX OS — Git Ignore
+# ==========================================
+
+# Build e artefatos compilados
+/build/
+/zig-out/
+/zig-cache/
+/.zig-cache/
+*.o
+*.obj
+*.a
+*.lib
+*.pdb
+*.ilk
+*.exp
+*.map
+*.py
+
+# Imagens de sistema e firmware
+*.iso
+*.img
+*.vhd
+*.vhdx
+*.vdi
+*.vmdk
+*.qcow2
+*.fd
+*.efi
+*.EFI
+
+# Ferramentas locais e dependências
+/tools/
+/node_modules/
+/.venv/
+/venv/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Logs e arquivos temporários
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+/tmp/
+/temp/
+/logs/
+
+# Resultados de execução e depuração
+*.dmp
+*.core
+*.trace
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+
+# Backups e snapshots
+/_snapshots/
+/backups/
+
+# IDEs e editores
+/.idea/
+/.vscode/*
+!/.vscode/extensions.json
+!/.vscode/settings.json
+*.suo
+*.user
+*.sln.docstates
+
+# Sistema operacional host
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/

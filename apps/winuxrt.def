@@ -1,0 +1,6 @@
+LIBRARY winuxrt
+EXPORTS
+    WinuxAdd @7
+    WinuxValue @11 DATA
+    WinuxAttached @13 DATA
+    OrdinalOnly @17 NONAME

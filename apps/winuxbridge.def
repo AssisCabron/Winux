@@ -1,0 +1,6 @@
+LIBRARY winuxbridge
+EXPORTS
+    BridgeAdd
+    ForwardAdd=winuxrt.WinuxAdd
+    ForwardData=winuxrt.WinuxValue DATA
+    ForwardOrdinal="winuxrt.#7"

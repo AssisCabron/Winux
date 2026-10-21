@@ -1,0 +1,5 @@
+# Original Winux script, not a Windows executable.
+echo Hello from a file inside our ISO!
+echo Reading files and dispatching commands now works.
+mem
+uptime
