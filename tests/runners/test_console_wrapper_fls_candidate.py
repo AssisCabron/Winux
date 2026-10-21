@@ -27,6 +27,7 @@ parser.add_argument('--check-user-scheduler',action='store_true',help='Require t
 parser.add_argument('--check-services',action='store_true',help='Verify resident CPL3 clockd autostart, scheduling, listing, stop and restart')
 parser.add_argument('--check-vfs',action='store_true',help='Verify FAT16 read-only mount, root listing and file contents')
 parser.add_argument('--check-preemption',action='store_true',help='Assert PIT IRQ0 interrupts two CPU-bound non-yielding CPL3 programs')
+parser.add_argument('--check-permanent',action='store_true',help='Assert the PIC/PIT handler remains armed across workloads and services use process-manager ready queue')
 parser.add_argument('--check-process-manager',action='store_true',help='Verify repeated process spawn, exit, resource reaping and free-page invariants')
 args=parser.parse_args()
 assert re.fullmatch(r'[a-zA-Z0-9-]{1,70}',args.result_tag), 'Invalid result tag'
@@ -118,6 +119,11 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
             assert 'VFS_FAT16_OK:' in remount
             assert 'WINUX_FAT16_RUNTIME_READ_OK' in send('catdisk STATUS.TXT','VFS_READ_OK')
             checks.append('block device detach invalidates VFS mount and remount restores FAT16 file access')
+        if args.check_permanent:
+            assert 'PIT_IRQ_PERSISTENT_READY' in output
+            armed=send('sched-status','ready_selector=process_manager')
+            assert 'enabled=1' in armed and 'ready_selector=process_manager' in armed
+            checks.append('PIT IRQ32 remains installed after boot; managed ready selection is shared with services')
         if args.check_process_manager:
             for cycle in range(2):
                 record=send('process-test','PROC_MANAGER_TEST_OK')
@@ -138,6 +144,10 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
             checks.append('twice: IRQ32 preempts CPU-bound managed CPL3 processes with per-thread RSP0, MXCSR and resource reaping')
             checks.append('preempted user trap frames, FXSTATE and kernel stacks owned by managed processes; no parallel thread registry')
             checks.append('two IRQ preemption/reap cycles restore physical free pages and kernel table allocations')
+            if args.check_permanent:
+                status=send('sched-status','ready_selector=process_manager')
+                assert 'enabled=1' in status and 'ready_selector=process_manager' in status
+                checks.append('persistent PIT remains armed after preemption regression and IRQ gate restoration')
         if args.check_scheduler:
             for cycle in range(2):
                 sched_text=send('sched-test','SCHED_TEST_OK')

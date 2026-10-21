@@ -5,7 +5,9 @@
  */
 #ifndef WINUX_PROCESS_MANAGER_PREVIEW_H
 #define WINUX_PROCESS_MANAGER_PREVIEW_H
-#define WX_PROC_CAPACITY 4U
+#define WX_PROC_CAPACITY 6U
+#define WX_PROC_TRANSIENT_COUNT 4U
+#define WX_PROC_SERVICE_OFFSET 4U
 enum {WX_PROC_FREE=0,WX_PROC_READY=1,WX_PROC_RUNNING=2,
       WX_PROC_EXITED=3,WX_PROC_FAILED=4};
 /* One managed thread per CPL3 process in this phase. Its user trap-frame,
@@ -18,6 +20,7 @@ typedef struct {
     u8 kernel_stack[16384] __attribute__((aligned(16)));
     u32 interrupt_count;
     u32 resume_count;
+    u32 started;
 } wx_proc_thread;
 _Static_assert(__builtin_offsetof(wx_proc_thread,fxstate)%16==0,
                "FXSAVE state must be 16-byte aligned");
@@ -27,6 +30,9 @@ typedef struct {
     obj_table objects;
     u64 owned_event;
     u32 pid,state,exit_code;
+    u32 resident,quanta;
+    u64 next_ready_tick;
+    const char *name;
 #ifdef WINUX_TIMER_PREEMPT_PREVIEW
     wx_proc_thread thread;
 #endif
@@ -36,6 +42,7 @@ static wx_managed_process wx_process_table[WX_PROC_CAPACITY];
 static wx_managed_process *wx_proc_current_irq;
 #endif
 static u32 wx_next_process_id=600;
+static u32 wx_proc_rr_cursor;
 
 static u32 wx_proc_free_pages(void){
     u32 available=0;
@@ -44,7 +51,7 @@ static u32 wx_proc_free_pages(void){
 }
 static wx_managed_process *wx_proc_spawn(u32 exit_code){
     if(wx_active || wx_user_resume_target)return 0;
-    for(u32 i=0;i<WX_PROC_CAPACITY;i++){
+    for(u32 i=0;i<WX_PROC_TRANSIENT_COUNT;i++){
         wx_managed_process *p=&wx_process_table[i];
         if(p->state!=WX_PROC_FREE)continue;
         u32 pid=++wx_next_process_id;
@@ -59,6 +66,52 @@ static wx_managed_process *wx_proc_spawn(u32 exit_code){
     }
     return 0;
 }
+/* Fixed resident slots share the ONLY Process Manager's PID, CR3,
+ * objects and thread context. Reserved service memory survives STOP,
+ * is reused on RESTART and never enters the transient job pool. */
+static wx_managed_process *wx_proc_resident(unsigned index,u32 pid,const char *name){
+    if(index>=2 || !pid || !name || wx_active)return 0;
+    wx_managed_process *p=&wx_process_table[WX_PROC_SERVICE_OFFSET+index];
+    if(p->state==WX_PROC_FREE){
+        if(!wx_space_make(&p->space,pid,0))return 0;
+        if(obj_event_create(&p->objects,OBJ_EVENT_ALL,0,0,&p->owned_event)){
+            wx_space_destroy(&p->space);pg_zero(p,sizeof(*p));return 0;
+        }
+        p->pid=pid;p->name=name;p->resident=1;
+        p->state=WX_PROC_EXITED;
+    }
+    return (p->resident && p->pid==pid && p->name==name)?p:0;
+}
+static int wx_proc_alive(const wx_managed_process *p){
+    return p && p->resident &&
+           (p->state==WX_PROC_READY || p->state==WX_PROC_RUNNING);
+}
+/* One ready-queue selection point for all resident processes.
+ * Service policies set their next deadline but do NOT choose a second
+ * scheduling order. This is one CPU, no priority/preempt-on-IRQ-switch yet. */
+static wx_managed_process *wx_proc_pick_ready(void){
+    for(u32 attempt=0;attempt<WX_PROC_CAPACITY;attempt++){
+        u32 index=(wx_proc_rr_cursor+attempt)%WX_PROC_CAPACITY;
+        wx_managed_process *p=&wx_process_table[index];
+        if(p->state!=WX_PROC_READY || !p->resident ||
+           timer_ticks<p->next_ready_tick)continue;
+        wx_proc_rr_cursor=(index+1)%WX_PROC_CAPACITY;
+        return p;
+    }
+    return 0;
+}
+static void wx_proc_list(void){
+    print("PROCESS_LIST_BEGIN\n");
+    for(u32 i=0;i<WX_PROC_CAPACITY;i++){
+        wx_managed_process *p=&wx_process_table[i];
+        if(!wx_proc_alive(p) && p->state!=WX_PROC_RUNNING)continue;
+        print("PROCESS pid=");number(p->pid);
+        print(" name=");print(p->name?p->name:"native-task");
+        print(" cpl=3 state=RUNNING cr3=");print_hex((u64)p->space.root);
+        print(" quanta=");number(p->quanta);print("\n");
+    }
+    print("PROCESS_LIST_END\n");
+}
 static int wx_proc_run(wx_managed_process *p){
     if(!p || p->state!=WX_PROC_READY || wx_active)return 0;
     const u64 original_cr3=wx_read_cr3();
@@ -69,7 +122,7 @@ static int wx_proc_run(wx_managed_process *p){
     return success;
 }
 static int wx_proc_reap(wx_managed_process *p){
-    if(!p || (p->state!=WX_PROC_EXITED && p->state!=WX_PROC_FAILED) ||
+    if(!p || p->resident || (p->state!=WX_PROC_EXITED && p->state!=WX_PROC_FAILED) ||
        wx_active)return 0;
 #ifdef WINUX_TIMER_PREEMPT_PREVIEW
     /* Never release the CPL3 thread stack/frame while IRQ entry owns it. */
@@ -89,8 +142,8 @@ static int wx_process_manager_test(void){
     int ok=1;
     u32 creations=0;
     for(u32 pass=0;pass<3 && ok;pass++){
-        wx_managed_process *jobs[WX_PROC_CAPACITY]={0};
-        for(u32 i=0;i<WX_PROC_CAPACITY;i++){
+        wx_managed_process *jobs[WX_PROC_TRANSIENT_COUNT]={0};
+        for(u32 i=0;i<WX_PROC_TRANSIENT_COUNT;i++){
             jobs[i]=wx_proc_spawn(30+i);
             if(!jobs[i]){ok=0;break;}
             creations++;
@@ -101,7 +154,7 @@ static int wx_process_manager_test(void){
                    jobs[j]->space.stack==jobs[i]->space.stack)ok=0;
         }
         if(ok && wx_proc_spawn(255))ok=0; /* all four slots occupied */
-        for(u32 i=0;i<WX_PROC_CAPACITY;i++)if(jobs[i]){
+        for(u32 i=0;i<WX_PROC_TRANSIENT_COUNT;i++)if(jobs[i]){
             if(ok && !wx_proc_run(jobs[i]))ok=0;
             if(jobs[i]->state==WX_PROC_READY)jobs[i]->state=WX_PROC_FAILED;
             if(!wx_proc_reap(jobs[i]))ok=0;
@@ -109,7 +162,7 @@ static int wx_process_manager_test(void){
         wx_load_cr3(base_cr3);
         if(wx_proc_free_pages()!=baseline || pg_used!=tables)ok=0;
     }
-    for(u32 i=0;i<WX_PROC_CAPACITY;i++)
+    for(u32 i=0;i<WX_PROC_TRANSIENT_COUNT;i++)
         if(wx_process_table[i].state!=WX_PROC_FREE)ok=0;
     if(ok){
         print("PROC_MANAGER_OK: ");

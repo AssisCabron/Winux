@@ -12,18 +12,19 @@ de páginas, a estrutura wx_address_space e as tabelas NT de objetos existentes.
   explícito. wx_space_destroy libera as seis páginas SOMENTE depois do
   retorno ao contexto privilegiado e do CR3 original. Não consome mais
   permanentemente os 64 slots pg_new destinados ao kernel.
-- src/process/process_manager_preview.h: registro inicial de quatro slots
-  gerenciados, estados FREE/READY/RUNNING/EXITED/FAILED, PIDs monotônicos,
+- src/process/process_manager_preview.h: registro único de seis slots
+  (quatro transitórios e dois residentes), estados FREE/READY/RUNNING/EXITED/FAILED, PIDs monotônicos,
   tabela NT de handles por processo, spawn de fixture CPL3, execução
   controlada, encerramento e reap de recursos. Não é um loader universal.
-- src/process/timer_preemption_preview.h: controlador IRQ0 opt-in, quadro
+- src/process/timer_preemption_preview.h: controlador IRQ0 persistente na ISO foundation experimental, quadro
   de interrupção de 15 GPRs + RIP/RFLAGS/RSP, retorno com IRETQ, contexto
   per-thread, CR3 específico, TSS.RSP0/stack privilegiada separada e FPU
   preservada com FXSAVE64/FXRSTOR64. Um IRQ em CPL0 apenas contabiliza ticks
   e retorna, sem escalonar kernel crítico.
-- experiments/preemption/boot.c habilita tudo somente numa ISO isolada.
-  A versão foundation experimental habilita os comandos de diagnóstico,
-  mas a IDT original de IRQ0 só é trocada DURANTE o teste específico.
+- experiments/preemption/boot.c mantém um experimento isolado.
+  Na versão foundation experimental, o IRQ0 é instalado após o boot
+  e permanece ativo; o diagnóstico preempt-test restaura o handler
+  que já estava instalado antes de seu próprio teste.
 - scripts/build/verify_process_preemption.ps1: compila e valida a candidata,
   exige dois ciclos com processos não cooperativos e preserva ISOs antigas.
 
@@ -50,9 +51,9 @@ físicas livres volte ao valor anterior.
 As provas foram exercitadas isoladamente no QEMU: 38 grupos no
 primeiro IRQ; 38 após a inclusão de pilhas/TSS e MXCSR; **39/39** com o
 Process Manager conectado e os dois ciclos repetidos.
-A regressão integrada mais recente passou em **53/53 grupos QEMU**, com
-serviços residentes, IPC, supervisão, FAT16, PCI/DMA, NT e preempção IRQ0
-no mesmo boot. O IRQ continua habilitado apenas durante a prova opt-in.
+A regressão integrada mais recente passou em **55/55 grupos QEMU**, com
+serviços residentes no mesmo Process Manager, IPC, supervisão, FAT16,
+PCI/DMA, NT e IRQ0 persistente no mesmo boot.
 Relatórios em build/console-timer-preemption-p4-test.json,
 build/console-preempt-stacks-fpu-test.json,
 build/console-managed-preemption-p4-test.json e
@@ -61,7 +62,7 @@ As identidades SHA-256 atuais são registradas a cada compilação em
 build/preemption-preview/preemption-preview-build.json e
 build/foundation-preview/foundation-preview-build.json. A última ISO
 integrada validada possui SHA-256
-3c111a46b1d715ca7a1e5d9eec4aae2fc9b2c9752fd9150e34a6bc5b6d9bd127.
+7f666f4d2b745d32de7fbcc1994598cab2e5683b30ea6cb087942a0dee299eb8.
 
 ## Consolidação dos contextos por processo
 
@@ -90,9 +91,9 @@ a contagem de páginas físicas livres e a quantidade de tabelas permanentes do
 kernel devem retornar exatamente aos valores da entrada. O teste é executado
 duas vezes dentro do mesmo boot.
 
-Isso prepara a estrutura de ownership para um escalonador preemptivo real,
-mas não transforma o experimento atual num scheduler permanente. A IDT do
-PIT ainda é substituída somente durante o teste, em uma CPU.
+O contexto IRQ pertence ao processo gerenciado. Na ISO foundation
+experimental, a IDT mantém o PIT preemptivo ativo durante a sessão inteira;
+sem SMP, preempção de CPL0 ou escalonamento geral de aplicações externas.
 
 ## Como repetir
 
@@ -113,10 +114,10 @@ depois de construir as variantes.
 
 ## Limites: ainda não é um scheduler de produção
 
-O agendamento pelo timer existe somente dentro do comando de prova; a IDT
-é restaurada imediatamente. O scheduler cooperativo continua atendendo
-serviços clockd/memd. O kernel é single-core, e apenas uma tarefa CPL3
-entra de cada vez. Faltam:
+Na candidata foundation, o timer permanece instalado após o boot e o
+Process Manager seleciona processos READY. As threads de kernel em CPL0
+não são preemptadas; processos CPL3 entram uma de cada vez na CPU.
+A ISO estável 0.38 não recebeu essa configuração. Faltam:
 
 - integrar IRQ preemption ao loop geral de ready-queues, estados BLOCKED,
   prioridades, sleep/wait e policy de quantum;

@@ -275,7 +275,7 @@ static void command(char *line, unsigned depth) {
     else if (same(line, "sched-test"))print(wx_scheduler_test() ? "SCHED_TEST_OK\n" : "SCHED_TEST_FAILED\n");
 #endif
 #ifdef WINUX_SERVICE_PREVIEW
-    else if(same(line,"ps"))wx_process_list();
+    else if(same(line,"ps"))wx_proc_list();
     else if(same(line,"services"))wx_service_status();
     else if(same(line,"ipc-test"))
         print(wx_service_ipc_guard_test()?"IPC_TEST_OK\n":"IPC_TEST_FAILED\n");
@@ -302,6 +302,7 @@ static void command(char *line, unsigned depth) {
 #endif
 #ifdef WINUX_TIMER_PREEMPT_PREVIEW
     else if(same(line,"preempt-test"))print(wx_timer_preemption_test()?"PREEMPT_TEST_OK\n":"PREEMPT_TEST_FAILED\n");
+    else if(same(line,"sched-status"))wx_timer_status();
 #endif
 #ifdef WINUX_PROC_MANAGER_PREVIEW
     else if(same(line,"process-test"))print(wx_process_manager_test()?"PROC_MANAGER_TEST_OK\n":"PROC_MANAGER_TEST_FAILED\n");
@@ -420,6 +421,9 @@ static void shell(void) {
 #ifdef WINUX_SERVICE_PREVIEW
     /* Auto-start one REAL CPL3 clock sampling service for this preview only. */
     if(!wx_service_boot())serial("SERVICE_BOOT_FAILED\r\n");
+#ifdef WINUX_TIMER_PREEMPT_PREVIEW
+    wx_timer_enable_permanent();
+#endif
 #endif
     print("\nType help to begin.\nwinux> ");
     serial("KERNEL: CONSOLE_READY\r\n");

@@ -15,6 +15,7 @@ static u32 wx_timer_last_mxcsr[2],wx_timer_exit_codes[2];
 /* One kernel-FPU save area for the single test CPU. User FXSTATE is per PID. */
 static u8 wx_timer_kernel_fx[512] __attribute__((aligned(16)));
 static volatile u32 wx_timer_stack_error;
+static volatile u32 wx_timer_permanent_enabled;
 
 __attribute__((used,noinline)) static u32 wx_timer_preempt_dispatch(u64 *frame) {
     timer_ticks++;
@@ -61,6 +62,28 @@ __attribute__((naked,used)) static void wx_timer_irq_gate(void) {
       "outb %al,$0x20; popq %rax; iretq");
 }
 
+/* Persistent IRQ0 handler inside the experimental Winux boot.
+ * CPL0 IRQs only count and ACK; CPL3 IRQs capture the active process.
+ * The kernel scheduling boundary itself is still single-CPU and cooperative
+ * on CPL0, but user threads may be involuntarily preempted by PIT. */
+static void wx_timer_enable_permanent(void){
+    u16 cs;
+    __asm__ volatile("mov %%cs,%0":"=r"(cs));
+    __asm__ volatile("cli":::"memory");
+    set_gate(32,wx_timer_irq_gate,cs);
+    wx_timer_permanent_enabled=1;
+    __asm__ volatile("sti":::"memory");
+    serial("PIT_IRQ_PERSISTENT_READY\r\n");
+}
+static void wx_timer_status(void){
+    u64 address=(u64)wx_timer_irq_gate;
+    int installed=wx_timer_permanent_enabled &&
+                  idt[32].low==(u16)address &&
+                  idt[32].middle==(u16)(address>>16) &&
+                  idt[32].high==(u32)(address>>32);
+    if(installed)print("PIT_SCHED_STATUS enabled=1 ready_selector=process_manager\n");
+    else print("PIT_SCHED_STATUS enabled=0 ready_selector=process_manager\n");
+}
 static void wx_timer_build_busy_loop(wx_address_space *space,u32 index){
     /* CPL3 fixture: set its own MXCSR from user memory, spin without
      * YIELD, then store MXCSR AFTER being preempted and resumed:
