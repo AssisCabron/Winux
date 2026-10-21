@@ -34,24 +34,11 @@ static wx_blk_req wx_request __attribute__((aligned(16)));
 static u8 wx_sector_buffer[WX_BLOCK_SECTOR_BYTES] __attribute__((aligned(16)));
 static volatile u8 wx_request_status __attribute__((aligned(16)));
 
-static inline void wx_out16(u16 p,u16 value){__asm__ volatile("outw %0,%1"::"a"(value),"Nd"(p));}
-static inline u16 wx_in16(u16 p){u16 v;__asm__ volatile("inw %1,%0":"=a"(v):"Nd"(p));return v;}
-static inline void wx_out32(u16 p,u32 value){__asm__ volatile("outl %0,%1"::"a"(value),"Nd"(p));}
-static inline u32 wx_in32(u16 p){u32 v;__asm__ volatile("inl %1,%0":"=a"(v):"Nd"(p));return v;}
+static wx_pci_function *wx_virtio_owner;
 static inline void wx_io_barrier(void){__asm__ volatile("":::"memory");}
-
-static u32 wx_pci_config(u8 bus,u8 slot,u8 func,u8 off) {
-    wx_out32(0xcf8,0x80000000U|((u32)bus<<16)|((u32)slot<<11)|((u32)func<<8)|(off&0xfcU));
-    return wx_in32(0xcfc);
-}
-static void wx_pci_write(u8 bus,u8 slot,u8 func,u8 off,u32 value) {
-    wx_out32(0xcf8,0x80000000U|((u32)bus<<16)|((u32)slot<<11)|((u32)func<<8)|(off&0xfcU));
-    wx_out32(0xcfc,value);
-}
 
 /* One hardware queue: zero-copied descriptor metadata, bounced 512-byte sector. */
 static int wx_virtio_read_one(wx_block_device *device,u64 lba,void *destination) {
-    (void)device;
     if(!wx_virtio_blk.initialized || !device || !destination || lba>=device->capacity_sectors)return 0;
     u16 n=wx_virtio_blk.queue_size,port=wx_virtio_blk.port;
     volatile wx_vq_desc *desc=(volatile wx_vq_desc*)wx_vq_memory;
@@ -59,11 +46,15 @@ static int wx_virtio_read_one(wx_block_device *device,u64 lba,void *destination)
     u32 used_offset=((16U*n+6U+2U*n+4095U)&~4095U);
     volatile u16 *used=(volatile u16*)(wx_vq_memory+used_offset);
     if(used_offset+6U+8U*n>sizeof(wx_vq_memory))return 0;
+    u64 req_bus=0,sector_bus=0,status_bus=0;
+    if(!wx_dma_bus_address(wx_virtio_owner,&wx_request,sizeof(wx_request),WX_DMA_TO_DEVICE,&req_bus) ||
+       !wx_dma_bus_address(wx_virtio_owner,wx_sector_buffer,sizeof(wx_sector_buffer),WX_DMA_FROM_DEVICE,&sector_bus) ||
+       !wx_dma_bus_address(wx_virtio_owner,(const void*)&wx_request_status,1,WX_DMA_FROM_DEVICE,&status_bus))return 0;
     wx_request=(wx_blk_req){0U,0U,lba}; /* VIRTIO_BLK_T_IN */
     wx_request_status=0xff;
-    desc[0]=(wx_vq_desc){(u64)&wx_request,16U,WX_VQ_NEXT,1U};
-    desc[1]=(wx_vq_desc){(u64)wx_sector_buffer,WX_BLOCK_SECTOR_BYTES,WX_VQ_NEXT|WX_VQ_WRITE,2U};
-    desc[2]=(wx_vq_desc){(u64)&wx_request_status,1U,WX_VQ_WRITE,0U};
+    desc[0]=(wx_vq_desc){req_bus,16U,WX_VQ_NEXT,1U};
+    desc[1]=(wx_vq_desc){sector_bus,WX_BLOCK_SECTOR_BYTES,WX_VQ_NEXT|WX_VQ_WRITE,2U};
+    desc[2]=(wx_vq_desc){status_bus,1U,WX_VQ_WRITE,0U};
     avail[2+(wx_virtio_blk.avail_index%n)]=0;
     wx_io_barrier();
     wx_virtio_blk.avail_index++;
@@ -87,53 +78,75 @@ static int wx_virtio_read(wx_block_device *device,u64 lba,u32 sectors,void *out)
 }
 
 /* PCI discovery is hardware-driven, not tied to a QEMU bus/slot. */
-static int wx_virtio_blk_detect(void){
-    if(wx_virtio_blk.initialized)return 1;
-    u8 found_bus=0,found_dev=0,found_fn=0;
-    u16 port=0;
-    for(u32 bus=0;bus<256U && !port;bus++)
-      for(u32 dev=0;dev<32U && !port;dev++)
-        for(u32 fn=0;fn<8U && !port;fn++){
-          u32 id=wx_pci_config((u8)bus,(u8)dev,(u8)fn,0);
-          if((id&65535U)!=0x1af4U || (id>>16)!=0x1001U)continue;
-          u32 bar=wx_pci_config((u8)bus,(u8)dev,(u8)fn,0x10);
-          if(!(bar&1U) || (bar&~3U)>0xff00U || (bar&~3U)<0x100U)continue;
-          port=(u16)(bar&~3U);found_bus=(u8)bus;found_dev=(u8)dev;found_fn=(u8)fn;
-        }
-    if(!port)return 0;
-    u32 control=wx_pci_config(found_bus,found_dev,found_fn,4);
-    wx_pci_write(found_bus,found_dev,found_fn,4,control|5U); /* bus mastering + I/O */
-    outb(port+0x12,0); /* device reset */
-    outb(port+0x12,1); /* ACKNOWLEDGE */
-    outb(port+0x12,3); /* DRIVER */
-    wx_out32(port+4,0); /* guest accepts NO optional features */
-    wx_out16(port+0x0e,0); /* queue selector */
+/* Called by the common PCI binding mechanism only after an exact match. */
+static int wx_virtio_probe(wx_pci_function *function){
+    if(!function || function->vendor!=0x1af4U || function->device!=0x1001U)return 0;
+    u32 bar=function->bars[0];
+    if(!(bar&1U) || (bar&~3U)>0xff00U || (bar&~3U)<0x100U)return 0;
+    u16 port=(u16)(bar&~3U);
+    u32 control=wx_pci_config(function->bus,function->slot,function->function,4);
+    wx_pci_write(function->bus,function->slot,function->function,4,control|5U);
+    outb(port+0x12,0);
+    outb(port+0x12,1);
+    outb(port+0x12,3);
+    wx_out32(port+4,0); /* no optional features */
+    wx_out16(port+0x0e,0);
     u16 size=wx_in16(port+0x0c);
-    if(size<3 || size>WX_VIRTQ_MAX){outb(port+0x12,0x83);return 0;}
     u32 used_offset=((16U*size+6U+2U*size+4095U)&~4095U);
-    if(used_offset+6U+8U*size>sizeof(wx_vq_memory)){outb(port+0x12,0x83);return 0;}
-    if((u64)wx_vq_memory>=0x100000000ULL ||
-       (u64)wx_sector_buffer>=0x100000000ULL ||
-       (u64)&wx_request>=0x100000000ULL ||
-       (u64)&wx_request_status>=0x100000000ULL){outb(port+0x12,0x83);return 0;}
+    if(size<3 || size>WX_VIRTQ_MAX ||
+       used_offset+6U+8U*size>sizeof(wx_vq_memory))goto fail;
+    if(!wx_dma_register(function,wx_vq_memory,sizeof(wx_vq_memory),
+                        WX_DMA_TO_DEVICE|WX_DMA_FROM_DEVICE) ||
+       !wx_dma_register(function,&wx_request,sizeof(wx_request),WX_DMA_TO_DEVICE) ||
+       !wx_dma_register(function,wx_sector_buffer,sizeof(wx_sector_buffer),WX_DMA_FROM_DEVICE) ||
+       !wx_dma_register(function,(const void*)&wx_request_status,1,WX_DMA_FROM_DEVICE))goto fail;
+    u64 queue_bus=0;
+    if(!wx_dma_bus_address(function,wx_vq_memory,sizeof(wx_vq_memory),
+                           WX_DMA_TO_DEVICE|WX_DMA_FROM_DEVICE,&queue_bus) ||
+       (queue_bus&4095ULL))goto fail;
     pg_zero(wx_vq_memory,sizeof(wx_vq_memory));
-    wx_out32(port+0x08,(u32)((u64)wx_vq_memory>>12));
+    wx_out32(port+0x08,(u32)(queue_bus>>12));
     u64 sectors=(u64)wx_in32(port+0x14)|((u64)wx_in32(port+0x18)<<32);
-    if(sectors<32 || sectors>0x100000000ULL){outb(port+0x12,0x83);return 0;}
+    if(sectors<32 || sectors>0x100000000ULL)goto fail;
     wx_virtio_blk.port=port;
     wx_virtio_blk.queue_size=size;
     wx_virtio_blk.avail_index=0;
     wx_virtio_blk.used_index=0;
     wx_virtio_blk.initialized=1;
+    wx_virtio_owner=function;
     wx_block_device device={"virtio-blk-legacy",sectors,WX_BLOCK_SECTOR_BYTES,
-                            WX_BLOCK_FLAG_READ_ONLY,0,wx_virtio_read};
-    if(!wx_block_register(&device)){wx_virtio_blk.initialized=0;outb(port+0x12,0x83);return 0;}
-    outb(port+0x12,7); /* DRIVER_OK */
+                            WX_BLOCK_FLAG_READ_ONLY,function,wx_virtio_read};
+    if(!wx_block_register(&device))goto fail;
+    outb(port+0x12,7);
     return 1;
+fail:
+    outb(port+0x12,0x83);
+    wx_virtio_owner=0;
+    wx_virtio_blk.initialized=0;
+    wx_dma_unregister_device(function);
+    return 0;
+}
+static int wx_virtio_blk_detect(void){
+    if(wx_virtio_blk.initialized)return 1;
+    static const wx_pci_driver driver={"virtio-blk-legacy",0x1af4U,0x1001U,wx_virtio_probe};
+    return wx_pci_bind(&driver);
 }
 static int wx_block_device_test(void){
     if(!wx_virtio_blk_detect()){print("BLOCK_TEST_FAILED: no legacy virtio PCI storage\\n");return 0;}
     wx_block_device *device=&wx_block_devices[0];
+    /* Unknown drivers must not bind, and DMA of unregistered kernel memory
+     * must be rejected by the API. Real IOMMU isolation is still absent. */
+    u64 bus_address=0;
+    static const wx_pci_driver unknown={"unmatched-native-driver",0xffffU,0xffffU,wx_virtio_probe};
+    if(!wx_virtio_owner || !wx_virtio_owner->claimed || !wx_virtio_owner->initialized ||
+       device->backend!=wx_virtio_owner ||
+       wx_pci_bind(&unknown) ||
+       wx_dma_bus_address(wx_virtio_owner,(const void*)&wx_virtio_owner,sizeof(wx_virtio_owner),
+                          WX_DMA_FROM_DEVICE,&bus_address) ||
+       wx_dma_bus_address(wx_virtio_owner,wx_sector_buffer,sizeof(wx_sector_buffer)+1U,
+                          WX_DMA_FROM_DEVICE,&bus_address))return 0;
+    print("PNP_DMA_GUARD_OK: PCI exact match, one claim, checked coherent DMA buffers\\n");
+
     u8 bootsector[512],marker[512],again[512];
     if(!wx_block_read(device,0,1,bootsector) || !wx_block_read(device,16,1,marker) ||
        !wx_block_read(device,16,1,again)){

@@ -23,16 +23,16 @@ $env:ZIG_GLOBAL_CACHE_DIR=Join-Path $root 'tools\zig-cache'
 if($LASTEXITCODE -ne 0){throw 'Existing NT ABI contract validation failed'}
 & $Python (Join-Path $root 'scripts\build\make_proc_space_preview.py') --experiment integration
 if($LASTEXITCODE -ne 0){throw 'Foundation ISO compilation failed'}
-& $Python (Join-Path $root 'tests\runners\test_console_wrapper_fls_candidate.py') --iso 'build/foundation-preview/winux-0.38-wrapper-fls-candidate.iso' --result-tag console-foundations-p4 --block-image 'build/block-preview/driver-test-disk.img' --check-proc-space --check-scheduler | Out-Null
+& $Python (Join-Path $root 'tests\runners\test_console_wrapper_fls_candidate.py') --iso 'build/foundation-preview/winux-0.38-wrapper-fls-candidate.iso' --result-tag console-foundations-p4 --block-image 'build/block-preview/driver-test-disk.img' --check-proc-space --check-scheduler --check-user-scheduler | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Foundation QEMU regression failed'}
 $result=Get-Content (Join-Path $build 'console-foundations-p4-test.json') -Raw|ConvertFrom-Json
-if(-not $result.passed -or $result.checks.Count -lt 40){throw 'Missing foundation test groups'}
+if(-not $result.passed -or $result.checks.Count -lt 41){throw 'Missing foundation test groups'}
 if((Get-FileHash -LiteralPath $disk -Algorithm SHA256).Hash -ne $diskBefore){throw 'Fixture disk was changed'}
 foreach($name in $gold.Keys) {
     if((Get-FileHash -LiteralPath (Join-Path $build $name) -Algorithm SHA256).Hash -ne $gold[$name]) {
         throw "Stable image changed during integration: $name"
     }
 }
-Write-Output "WINUX_FOUNDATIONS_OK: $($result.checks.Count) QEMU groups passed"
+Write-Output "WINUX_FOUNDATIONS_OK: $($result.checks.Count) QEMU groups passed (PCI PnP/DMA, per-CR3 CPL3 yield/resume, x64 context)"
 Write-Output "Disk remained read-only: SHA256 $diskBefore"
 Write-Output "Integrated ISO: $($result.iso_sha256)"

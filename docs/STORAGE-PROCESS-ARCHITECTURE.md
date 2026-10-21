@@ -10,8 +10,8 @@ gerenciador de objetos já existente. Entrada: experiments/integration/boot.c.
 Não existe uma segunda versão desses componentes.
 
 - build/foundation-preview/winux-0.38-wrapper-fls-candidate.iso
-- SHA-256 a56c423a8b7a4bba1ffbb7270310f599edd5685e80928bf5598343f23edafcad
-- Resultado: build/console-foundations-p4-test.json = passed:true, 40 grupos
+- A identidade da ISO experimental e gerada a cada build e consta em build/foundation-preview/foundation-preview-build.json.
+- Resultado atual: build/console-foundations-p4-test.json = passed:true, 41 grupos (CPL3 yield/resume, FPU e PnP/DMA)
 - Log: build/console-foundations-p4-serial.log confirma BLOCK_READ_OK,
   SCHED_CONTEXT_OK, SCHED_OBJECT_NAMESPACE_OK e PROC_SPACE_OK.
 - O disco de teste manteve SHA-256

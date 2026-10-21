@@ -38,10 +38,14 @@ static int wx_space_make(wx_address_space *p,u32 pid,u32 exit_code) {
     p->pt[code_pt]=(u64)p->code|PG_PRESENT|PG_USER;
     p->pt[stack_pt]=(u64)p->stack|PG_PRESENT|PG_WRITE|PG_USER|PG_NX;
 
-    /* Trusted miniature CPL3 program invokes native WX_NATIVE_EXIT. The
-     * process-specific return value is encoded in the physical code page. */
+    /* Trusted miniature CPL3 program. Under the scheduler preview, it
+     * suspends with native YIELD and must resume *after* the INT 80h to EXIT. */
     u8 *code=(u8*)p->code;
     unsigned n=0;
+#ifdef WINUX_USER_SCHED_PREVIEW
+    code[n++]=0xb8;*(u32*)(code+n)=WX_NATIVE_YIELD;n+=4;
+    code[n++]=0xcd;code[n++]=0x80;
+#endif
     code[n++]=0xb8;*(u32*)(code+n)=WX_NATIVE_EXIT;n+=4; /* mov eax,0 */
     code[n++]=0xbf;*(u32*)(code+n)=exit_code;n+=4;      /* mov edi,code */
     code[n++]=0xcd;code[n++]=0x80;                      /* int 80h */

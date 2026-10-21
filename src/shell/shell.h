@@ -169,6 +169,8 @@ static int pe_test(void) {
 #endif
 #ifdef WINUX_BLOCK_PREVIEW
 #include "../storage/block_core.h"
+#include "../device/pci_pnp.h"
+#include "../device/dma.h"
 #include "../storage/virtio_blk_legacy.h"
 #endif
 

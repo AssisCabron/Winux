@@ -16,9 +16,17 @@ GOLD={
 for f,v in GOLD.items():assert sha(ROOT/"build"/f)==v
 zig=ROOT/"tools"/"zig-x86_64-windows-0.14.1"/"zig.exe"
 efi=OUT/"BOOTX64-wrapper-fls.EFI"
+sources=[str(ROOT/"experiments"/EXPERIMENT/"boot.c")]
+if EXPERIMENT in ("scheduler","integration"):
+    # Standalone assembly owns the register and stack switch contract.
+    asm=ROOT/"src"/"arch"/"x86_64"/"context_switch.S"
+    obj=OUT/"context_switch.obj"
+    subprocess.run([str(zig),"build-obj","-target","x86_64-uefi","-O","ReleaseSmall",
+                    f"-femit-bin={obj}",str(asm)],check=True)
+    sources.append(str(obj))
 subprocess.run([str(zig),"build-exe","-target","x86_64-uefi","-O","ReleaseSmall",
  "-fno-stack-check","-fno-stack-protector","-mno-red-zone",f"-femit-bin={efi}",
- "-fstrip",str(ROOT/"experiments"/EXPERIMENT/"boot.c")],check=True)
+ "-fstrip",*sources],check=True)
 pack=ROOT/"experiments"/"packaging"/"make_iso_wrapper_fls_candidate.py"
 text=pack.read_text(encoding="utf8")
 assert text.count("build=ROOT/'build'")==1
