@@ -8,13 +8,33 @@
 #define WX_PROC_CAPACITY 4U
 enum {WX_PROC_FREE=0,WX_PROC_READY=1,WX_PROC_RUNNING=2,
       WX_PROC_EXITED=3,WX_PROC_FAILED=4};
+/* One managed thread per CPL3 process in this phase. Its user trap-frame,
+ * x87/SSE state and TSS RSP0 stack must have the same lifecycle as the PID.
+ * Future multiple threads can extend this structure without parallel tables. */
+#ifdef WINUX_TIMER_PREEMPT_PREVIEW
+typedef struct {
+    wx_user_resume_frame frame;
+    u8 fxstate[512] __attribute__((aligned(16)));
+    u8 kernel_stack[16384] __attribute__((aligned(16)));
+    u32 interrupt_count;
+    u32 resume_count;
+} wx_proc_thread;
+_Static_assert(__builtin_offsetof(wx_proc_thread,fxstate)%16==0,
+               "FXSAVE state must be 16-byte aligned");
+#endif
 typedef struct {
     wx_address_space space;
     obj_table objects;
     u64 owned_event;
     u32 pid,state,exit_code;
+#ifdef WINUX_TIMER_PREEMPT_PREVIEW
+    wx_proc_thread thread;
+#endif
 } wx_managed_process;
 static wx_managed_process wx_process_table[WX_PROC_CAPACITY];
+#ifdef WINUX_TIMER_PREEMPT_PREVIEW
+static wx_managed_process *wx_proc_current_irq;
+#endif
 static u32 wx_next_process_id=600;
 
 static u32 wx_proc_free_pages(void){
@@ -51,6 +71,10 @@ static int wx_proc_run(wx_managed_process *p){
 static int wx_proc_reap(wx_managed_process *p){
     if(!p || (p->state!=WX_PROC_EXITED && p->state!=WX_PROC_FAILED) ||
        wx_active)return 0;
+#ifdef WINUX_TIMER_PREEMPT_PREVIEW
+    /* Never release the CPL3 thread stack/frame while IRQ entry owns it. */
+    if(wx_proc_current_irq==p)return 0;
+#endif
     int ok=!obj_close(&p->objects,p->owned_event);
     for(u32 k=0;k<OBJ_SLOTS;k++)if(p->objects.slots[k].kind)ok=0;
     if(!wx_space_destroy(&p->space))ok=0;

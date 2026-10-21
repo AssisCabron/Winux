@@ -105,9 +105,9 @@ O arquivo tests/runners/test_console_wrapper_fls_candidate.py aceita
 9. Regressões de memória, DLL, console, PCI/DMA, heap e CPL3 anteriores
    passando no mesmo boot QEMU.
 
-A execução com os dois serviços passou em 45 grupos QEMU, e a validação
-conjunta com FAT16 e desmontagem do volume passou em 47 grupos. O resultado final e o hash da ISO
-ficam nos arquivos build/console-foundations-p4-test.json e
+A regressão integrada final passou em **51 grupos QEMU**, incluindo
+mailbox IPC, injeção de falha CPL3 e reinício supervisionado. O resultado
+e o hash da ISO estão em build/console-foundations-p4-test.json e
 build/foundation-preview/foundation-preview-build.json.
 
 Comando de reprodução:
@@ -126,12 +126,13 @@ total livre na saída. Não toca quadros possuídos pelo processo CPL3.
 
 ## Limitações pendentes
 
-Existem dois slots explícitos com estados e endereços independentes,
-mas ainda não um Service Control Manager geral. Faltam processos arbitrários,
-supervisão e reinício automático após
-falhas, prioridade, IPC, jobs, segurança e tokens, autenticação,
-sessões, VFS persistente, chamadas bloqueantes, preempção por timer,
-SMP e integração com drivers Windows SYS. O próximo serviço só deve
+Existem dois serviços com estados e endereços independentes, mas ainda não um
+Service Control Manager geral. A supervisão se limita a 2 reinícios do
+processo de teste e a comunicação usa uma mailbox de valor escalar.
+Faltam dependências declarativas, configuração persistente, IPC com buffers,
+permissões por token, autenticação, sessões, jobs, prioridades, espera
+bloqueante e SMP. A preempção PIT só é ativada durante teste próprio, não
+como política permanente do kernel. Drivers Windows SYS permanecem ausentes. O próximo serviço só deve
 ser registrado quando executar trabalho implementado e comprovado.
 
 O kernel histórico e as ISOs estáveis não são substituídos por esta ISO.

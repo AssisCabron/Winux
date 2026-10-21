@@ -48,11 +48,51 @@ duas vezes, totalizando 24 instâncias, exigindo que o total de páginas
 físicas livres volte ao valor anterior.
 
 As provas foram exercitadas isoladamente no QEMU: 38 grupos no
-primeiro IRQ; 38 após a inclusão de pilhas/TSS e MXCSR; 39 com o
-Process Manager real conectado e os dois ciclos repetidos.
+primeiro IRQ; 38 após a inclusão de pilhas/TSS e MXCSR; **39/39** com o
+Process Manager conectado e os dois ciclos repetidos.
+A regressão integrada mais recente passou em **53/53 grupos QEMU**, com
+serviços residentes, IPC, supervisão, FAT16, PCI/DMA, NT e preempção IRQ0
+no mesmo boot. O IRQ continua habilitado apenas durante a prova opt-in.
 Relatórios em build/console-timer-preemption-p4-test.json,
 build/console-preempt-stacks-fpu-test.json,
-build/console-managed-preemption-p4-test.json.
+build/console-managed-preemption-p4-test.json e
+build/console-foundations-p4-test.json.
+As identidades SHA-256 atuais são registradas a cada compilação em
+build/preemption-preview/preemption-preview-build.json e
+build/foundation-preview/foundation-preview-build.json. A última ISO
+integrada validada possui SHA-256
+3c111a46b1d715ca7a1e5d9eec4aae2fc9b2c9752fd9150e34a6bc5b6d9bd127.
+
+## Consolidação dos contextos por processo
+
+A implementação original possuía o registro wx_process_table, mas mantinha
+quadros de registradores, buffers FXSAVE e pilhas RSP0 em três arrays
+independentes indexados pela ordem do fixture. Isso não permitia controlar
+ownership do contexto pelo PID ao generalizar o escalonamento.
+
+O wx_managed_process agora possui um wx_proc_thread com:
+
+- frame completo de continuação CPL3 (15 GPRs, RIP/RSP/RFLAGS);
+- FXSTATE alinhado a 16 bytes e preservado por tarefa;
+- pilha de entrada privilegiada RSP0 de 16 KiB;
+- contadores de interrupção e retomada por thread.
+
+A entrada do IRQ0 consulta wx_proc_current_irq, que aponta para o mesmo
+wx_managed_process gerenciado por wx_proc_spawn e wx_proc_reap. O handler
+registra o frame de interrupção no contexto do processo interrompido, e o
+scheduler usa o contexto desse mesmo processo para trocar CR3 e retomar
+por IRETQ. Não existe mais vetor paralelo de contextos de usuário.
+
+A função wx_proc_reap se recusa a liberar um processo enquanto a entrada de
+IRQ possui seu contexto ativo. O teste verifica que duas tarefas são
+interrompidas e retomadas, mantendo MXCSR independentes; após o encerramento,
+a contagem de páginas físicas livres e a quantidade de tabelas permanentes do
+kernel devem retornar exatamente aos valores da entrada. O teste é executado
+duas vezes dentro do mesmo boot.
+
+Isso prepara a estrutura de ownership para um escalonador preemptivo real,
+mas não transforma o experimento atual num scheduler permanente. A IDT do
+PIT ainda é substituída somente durante o teste, em uma CPU.
 
 ## Como repetir
 

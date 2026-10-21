@@ -19,9 +19,9 @@ if($LASTEXITCODE -ne 0){throw 'Preemption candidate build failed'}
 & $Python (Join-Path $root 'tests\runners\test_console_wrapper_fls_candidate.py') --iso 'build/preemption-preview/winux-0.38-wrapper-fls-candidate.iso' --result-tag 'console-managed-preemption-p4' --check-process-manager --check-preemption | Out-Null
 if($LASTEXITCODE -ne 0){throw 'IRQ0/ProcessManager QEMU regression failed'}
 $j=Get-Content (Join-Path $build 'console-managed-preemption-p4-test.json') -Raw|ConvertFrom-Json
-if(!$j.passed -or $j.checks.Count -lt 39){throw 'Incomplete managed preemption regression'}
+if(!$j.passed -or $j.checks.Count -lt 41){throw 'Incomplete managed preemption regression'}
 $trace=Get-Content (Join-Path $build 'console-managed-preemption-p4-serial.log') -Raw
-foreach($marker in @('PIT_PREEMPT_OK:', 'PIT_THREAD_STACKS_OK:', 'PIT_THREAD_FPU_OK:', 'PIT_PROC_MANAGER_OK:', 'PROC_MANAGER_OK:')){
+foreach($marker in @('PIT_PREEMPT_OK:', 'PIT_THREAD_STACKS_OK:', 'PIT_THREAD_FPU_OK:', 'PIT_PROC_MANAGER_OK:', 'PIT_THREAD_OWNERSHIP_OK:', 'PIT_RESOURCE_REAP_OK:', 'PROC_MANAGER_OK:')){
     if(([regex]::Matches($trace,[regex]::Escape($marker))).Count -lt 2){throw "Expected two complete cycles of $marker"}
 }
 foreach($name in $known.Keys){

@@ -34,7 +34,7 @@ if($LASTEXITCODE -ne 0){throw 'Foundation ISO compilation failed'}
 & $Python (Join-Path $root 'tests\runners\test_console_wrapper_fls_candidate.py') --iso 'build/foundation-preview/winux-0.38-wrapper-fls-candidate.iso' --result-tag console-foundations-p4 --block-image 'build/vfs-preview/fat16-test-disk.img' --check-proc-space --check-scheduler --check-user-scheduler --check-services --check-vfs --check-process-manager --check-preemption | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Foundation QEMU regression failed'}
 $result=Get-Content (Join-Path $build 'console-foundations-p4-test.json') -Raw|ConvertFrom-Json
-if(-not $result.passed -or $result.checks.Count -lt 51){throw 'Missing foundation test groups'}
+if(-not $result.passed -or $result.checks.Count -lt 53){throw 'Missing foundation test groups'}
 if((Get-FileHash -LiteralPath $disk -Algorithm SHA256).Hash -ne $diskBefore){throw 'Fixture disk was changed'}
 foreach($name in $gold.Keys) {
     if((Get-FileHash -LiteralPath (Join-Path $build $name) -Algorithm SHA256).Hash -ne $gold[$name]) {

@@ -131,9 +131,13 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
                 assert 'PIT_THREAD_STACKS_OK: separate privileged RSP0' in preempt_text
                 assert 'PIT_THREAD_FPU_OK: distinct CPL3 MXCSR values preserved' in preempt_text
                 assert 'PIT_PROC_MANAGER_OK: IRQ preemption used managed PIDs' in preempt_text
+                assert 'PIT_THREAD_OWNERSHIP_OK: all GPR, FPU and RSP0 storage belongs to managed processes' in preempt_text
+                assert 'PIT_RESOURCE_REAP_OK: IRQ-managed processes restored physical free-page count' in preempt_text
                 match=re.search(r'PIT_PREEMPT_STATS: interrupts=(\d+) context_switches=(\d+)',preempt_text)
                 assert match and int(match.group(1))>=2 and int(match.group(2))==3
             checks.append('twice: IRQ32 preempts CPU-bound managed CPL3 processes with per-thread RSP0, MXCSR and resource reaping')
+            checks.append('preempted user trap frames, FXSTATE and kernel stacks owned by managed processes; no parallel thread registry')
+            checks.append('two IRQ preemption/reap cycles restore physical free pages and kernel table allocations')
         if args.check_scheduler:
             for cycle in range(2):
                 sched_text=send('sched-test','SCHED_TEST_OK')

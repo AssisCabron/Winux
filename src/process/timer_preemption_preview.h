@@ -6,31 +6,32 @@
 #ifndef WINUX_TIMER_PREEMPTION_PREVIEW_H
 #define WINUX_TIMER_PREEMPTION_PREVIEW_H
 
-static wx_user_resume_frame wx_timer_user_frames[2];
-static u8 wx_timer_user_fx[2][512] __attribute__((aligned(16)));
-static wx_user_resume_frame *wx_timer_current_frame;
+/* User frames, FPU and privileged IRQ stacks now live inside their owners
+ * (wx_managed_process.thread), not in a parallel test-only thread registry. */
 static volatile u32 wx_timer_interruptions,wx_timer_switches;
 static volatile u32 wx_timer_preempt_triggered;
 static u64 wx_timer_last_ip[2],wx_timer_last_rflags[2];
 static u32 wx_timer_last_mxcsr[2],wx_timer_exit_codes[2];
-static u8 wx_timer_kernel_stacks[2][16384] __attribute__((aligned(16)));
+/* One kernel-FPU save area for the single test CPU. User FXSTATE is per PID. */
 static u8 wx_timer_kernel_fx[512] __attribute__((aligned(16)));
-static volatile u32 wx_timer_stack_error,wx_timer_current_index;
+static volatile u32 wx_timer_stack_error;
 
 __attribute__((used,noinline)) static u32 wx_timer_preempt_dispatch(u64 *frame) {
     timer_ticks++;
-    if(!frame || !wx_active || !wx_timer_current_frame ||
+    if(!frame || !wx_active || !wx_proc_current_irq ||
        (frame[16]&3ULL)!=3ULL)return 0;
     /* An involuntary IRQ must preserve RAX exactly. Unlike YIELD,
      * there is no syscall return value to write into user registers. */
     u64 frame_va=(u64)frame;
-    u64 stack_base=(u64)wx_timer_kernel_stacks[wx_timer_current_index];
-    if(frame_va<stack_base || frame_va+20*8>stack_base+16384)
+    wx_proc_thread *thread=&wx_proc_current_irq->thread;
+    u64 stack_base=(u64)thread->kernel_stack;
+    if(frame_va<stack_base || frame_va+20*8>stack_base+sizeof(thread->kernel_stack))
         wx_timer_stack_error=1;
-    for(u32 i=0;i<15;i++)wx_timer_current_frame->regs[i]=frame[i];
-    wx_timer_current_frame->rip=frame[15];
-    wx_timer_current_frame->rflags=frame[17];
-    wx_timer_current_frame->rsp=frame[18];
+    for(u32 i=0;i<15;i++)thread->frame.regs[i]=frame[i];
+    thread->frame.rip=frame[15];
+    thread->frame.rflags=frame[17];
+    thread->frame.rsp=frame[18];
+    thread->interrupt_count++;
     wx_timer_interruptions++;
     wx_timer_preempt_triggered=1;
     wx_exit_requested=1;wx_exit_code=0;
@@ -86,39 +87,40 @@ static void wx_timer_build_busy_loop(wx_address_space *space,u32 index){
     b[n++]=0x0f;b[n++]=0x0b;
 }
 
-static int wx_timer_execute(wx_address_space *space,u32 index,int resume) {
-    if(!space || index>=2 || !wx_sched_kernel_map_ok(space) ||
-       wx_active || wx_user_resume_target)return 0;
+static int wx_timer_execute(wx_managed_process *process,u32 index,int resume) {
+    if(!process || index>=2 || !wx_sched_kernel_map_ok(&process->space) ||
+       wx_active || wx_user_resume_target || wx_proc_current_irq)return 0;
+    wx_address_space *space=&process->space;
+    wx_proc_thread *thread=&process->thread;
     u64 old_cr3=wx_read_cr3();
-    wx_timer_current_frame=&wx_timer_user_frames[index];
-    wx_user_resume_target=&wx_timer_user_frames[index];
+    wx_proc_current_irq=process;
+    wx_user_resume_target=&thread->frame;
     wx_user_yielded=0;
     wx_timer_preempt_triggered=0;
     wx_exit_requested=0;wx_exit_code=0;
     wx_fault_vector=0;wx_fault_error=0;
     wx_active=1;
-    wx_timer_current_index=index;
-    /* RSP0 must be owned by the interrupted thread, not a shared CPU stack.
-     * Our single-CPU scheduler updates the TSS before entering user mode. */
-    wx_tss.rsp0=((u64)wx_timer_kernel_stacks[index]+16384-16)&~15ULL;
+    /* Each managed thread now owns its TSS RSP0 kernel stack. */
+    wx_tss.rsp0=((u64)thread->kernel_stack+sizeof(thread->kernel_stack)-16)&~15ULL;
     __asm__ volatile("fxsave64 %0":"=m"(wx_timer_kernel_fx)::"memory");
     wx_load_cr3((u64)space->root);
-    if(resume)__asm__ volatile("fxrstor64 %0"::"m"(wx_timer_user_fx[index]):"memory");
-    u32 result=resume?wx_resume_user(&wx_timer_user_frames[index]):
+    if(resume)__asm__ volatile("fxrstor64 %0"::"m"(thread->fxstate):"memory");
+    u32 result=resume?wx_resume_user(&thread->frame):
                       wx_enter_user(WX_USER_CODE,WX_USER_STACK+4096-16);
-    __asm__ volatile("fxsave64 %0":"=m"(wx_timer_user_fx[index])::"memory");
+    __asm__ volatile("fxsave64 %0":"=m"(thread->fxstate)::"memory");
     __asm__ volatile("fxrstor64 %0"::"m"(wx_timer_kernel_fx):"memory");
     wx_load_cr3(old_cr3);
-    wx_active=0;wx_user_resume_target=0;wx_timer_current_frame=0;
+    wx_active=0;wx_user_resume_target=0;wx_proc_current_irq=0;
+    if(resume)thread->resume_count++;
     if(wx_fault_vector)return 0;
     if(!resume){
         if(!wx_timer_preempt_triggered || wx_user_yielded ||
            !wx_exit_requested || result)return 0;
-        u64 rip=wx_timer_user_frames[index].rip;
-        u64 flags=wx_timer_user_frames[index].rflags;
+        u64 rip=thread->frame.rip;
+        u64 flags=thread->frame.rflags;
         wx_timer_last_ip[index]=rip;
         wx_timer_last_rflags[index]=flags;
-        wx_timer_last_mxcsr[index]=*(u32*)(wx_timer_user_fx[index]+24);
+        wx_timer_last_mxcsr[index]=*(u32*)(thread->fxstate+24);
         if(rip<WX_USER_CODE+23 || rip>WX_USER_CODE+28 ||
            !(flags&0x200ULL) || (flags&0x3000ULL) ||
            wx_timer_last_mxcsr[index]!=(index==0?0x1f80U:0x3f80U))
@@ -137,7 +139,7 @@ static int wx_timer_execute(wx_address_space *space,u32 index,int resume) {
 static int wx_timer_managed_step(wx_managed_process *p,u32 index,int resume){
     if(!p || p->state!=WX_PROC_READY)return 0;
     p->state=WX_PROC_RUNNING;
-    int success=wx_timer_execute(&p->space,index,resume);
+    int success=wx_timer_execute(p,index,resume);
     p->state=success?(resume?WX_PROC_EXITED:WX_PROC_READY):WX_PROC_FAILED;
     return success;
 }
@@ -146,6 +148,7 @@ static int wx_timer_preemption_test(void){
     if(!wx_prepare_tss())return 0;
     u64 original_cr3=wx_read_cr3();
     u32 tables_before=pg_used;
+    u32 free_pages_before=wx_proc_free_pages();
     u16 cs;
     __asm__ volatile("mov %%cs,%0":"=r"(cs));
     idt_gate old_irq=idt[32];
@@ -153,7 +156,7 @@ static int wx_timer_preemption_test(void){
     wx_timer_stack_error=0;
     int ok=1;
     wx_managed_process *first=0,*second=0;
-    pg_zero(wx_timer_user_frames,sizeof(wx_timer_user_frames));
+    wx_proc_current_irq=0;
     wx_timer_interruptions=0;wx_timer_switches=0;
     first=wx_proc_spawn(21);
     if(first)second=wx_proc_spawn(42);
@@ -180,6 +183,8 @@ static int wx_timer_preemption_test(void){
     if(ok)ok=wx_timer_interruptions>=2 && wx_timer_switches==3 &&
              wx_timer_exit_codes[0]==21 && wx_timer_exit_codes[1]==42 &&
              first->state==WX_PROC_EXITED && second->state==WX_PROC_EXITED &&
+             first->thread.interrupt_count>=1 && second->thread.interrupt_count>=1 &&
+             first->thread.resume_count==1 && second->thread.resume_count==1 &&
              !wx_timer_stack_error;
 done:
     /* Restore original IRQ0 before any other console/VM regression. */
@@ -187,7 +192,7 @@ done:
     idt[32]=old_irq;
     wx_tss.rsp0=old_rsp0;
     wx_load_cr3(original_cr3);
-    wx_active=0;wx_user_resume_target=0;wx_timer_current_frame=0;
+    wx_active=0;wx_user_resume_target=0;wx_proc_current_irq=0;
     if(first){
         if(first->state!=WX_PROC_EXITED)first->state=WX_PROC_FAILED;
         if(!wx_proc_reap(first))ok=0;
@@ -196,7 +201,8 @@ done:
         if(second->state!=WX_PROC_EXITED)second->state=WX_PROC_FAILED;
         if(!wx_proc_reap(second))ok=0;
     }
-    if(pg_used!=tables_before)ok=0;
+    if(pg_used!=tables_before || wx_proc_free_pages()!=free_pages_before ||
+       wx_proc_current_irq)ok=0;
     __asm__ volatile("sti":::"memory");
     if(ok){
         print("PIT_PREEMPT_OK: IRQ32 forced two non-yielding CPL3 loops, two CR3, restored RIP/RFLAGS, exits 42/21\n");
@@ -205,6 +211,8 @@ done:
         print("PIT_THREAD_STACKS_OK: separate privileged RSP0 for each CPL3 thread\n");
         print("PIT_THREAD_FPU_OK: distinct CPL3 MXCSR values preserved across IRQs and resumed instructions\n");
         print("PIT_PROC_MANAGER_OK: IRQ preemption used managed PIDs, NT handle ownership and full process reaping\n");
+        print("PIT_THREAD_OWNERSHIP_OK: all GPR, FPU and RSP0 storage belongs to managed processes\n");
+        print("PIT_RESOURCE_REAP_OK: IRQ-managed processes restored physical free-page count and kernel table pool\n");
     }else{
         print("PIT_PREEMPT_FAILED: interrupts=");number(wx_timer_interruptions);
         print(" switches=");number(wx_timer_switches);print("\n");
