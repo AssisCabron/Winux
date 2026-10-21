@@ -89,12 +89,24 @@ static u32 wx_current_service_pid;
 static u64 wx_service_ipc_send(u32 sender_pid,u32 receiver_pid,u64 value);
 static u64 wx_service_ipc_receive(u32 receiver_pid);
 #endif
+#ifdef WINUX_PROC_MANAGER_PREVIEW
+/* Defined in the one authoritative Process Manager, after this gate. */
+static int wx_proc_request_sleep(u64 ticks);
+#endif
 /* Frame saved in order rax, rcx, rdx, rbx, rbp, rsi, rdi, r8 ... r15. */
 __attribute__((used,noinline)) static void wx_sys_dispatch(u64 *frame) {
     u64 number=frame[0],arg0=frame[6],arg1=frame[5],arg2=frame[2];
 #ifdef WINUX_USER_SCHED_PREVIEW
-    if(number==WX_NATIVE_YIELD && wx_user_resume_target){
-        /* The guest sees 0 as the return value of yield when it resumes. */
+    if((number==WX_NATIVE_YIELD || number==WX_NATIVE_SLEEP_TICKS) && wx_user_resume_target){
+#ifdef WINUX_PROC_MANAGER_PREVIEW
+        if(number==WX_NATIVE_SLEEP_TICKS && !wx_proc_request_sleep(arg0)){
+            frame[0]=~21ULL; /* -EINVAL, no process context or bad delay */
+            return;
+        }
+#else
+        if(number==WX_NATIVE_SLEEP_TICKS){frame[0]=~37ULL;return;}
+#endif
+        /* The guest sees 0 as the return value of yield or sleep when resumed. */
         frame[0]=0;
         for(unsigned i=0;i<15;i++)wx_user_resume_target->regs[i]=frame[i];
         wx_user_resume_target->rip=frame[15];

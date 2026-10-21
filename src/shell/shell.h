@@ -177,6 +177,7 @@ static int pe_test(void) {
 #endif
 #ifdef WINUX_TIMER_PREEMPT_PREVIEW
 #include "../process/timer_preemption_preview.h"
+#include "../tests/process/process_wait_test.h"
 #endif
 #ifdef WINUX_SERVICE_PREVIEW
 #include "../process/service_manager_preview.h"
@@ -302,6 +303,7 @@ static void command(char *line, unsigned depth) {
 #endif
 #ifdef WINUX_TIMER_PREEMPT_PREVIEW
     else if(same(line,"preempt-test"))print(wx_timer_preemption_test()?"PREEMPT_TEST_OK\n":"PREEMPT_TEST_FAILED\n");
+    else if(same(line,"wait-test"))print(wx_process_wait_test()?"WAIT_TEST_OK\n":"WAIT_TEST_FAILED\n");
     else if(same(line,"sched-status"))wx_timer_status();
 #endif
 #ifdef WINUX_PROC_MANAGER_PREVIEW

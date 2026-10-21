@@ -81,8 +81,14 @@ static void wx_timer_status(void){
                   idt[32].low==(u16)address &&
                   idt[32].middle==(u16)(address>>16) &&
                   idt[32].high==(u32)(address>>32);
-    if(installed)print("PIT_SCHED_STATUS enabled=1 ready_selector=process_manager\n");
-    else print("PIT_SCHED_STATUS enabled=0 ready_selector=process_manager\n");
+    print(installed?"PIT_SCHED_STATUS enabled=1":"PIT_SCHED_STATUS enabled=0");
+    u32 blocked=0;
+    for(u32 i=0;i<WX_PROC_CAPACITY;i++)
+        if(wx_process_table[i].state==WX_PROC_BLOCKED)blocked++;
+    print(" blocked=");number(blocked);
+    print(" sleeps=");number(wx_proc_sleep_calls);
+    print(" wakes=");number(wx_proc_wake_count);
+    print(" ready_selector=process_manager\n");
 }
 static void wx_timer_build_busy_loop(wx_address_space *space,u32 index){
     /* CPL3 fixture: set its own MXCSR from user memory, spin without

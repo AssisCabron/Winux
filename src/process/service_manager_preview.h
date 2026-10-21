@@ -83,7 +83,10 @@ static void wx_service_compile(wx_resident_service *s){
         code[n++]=0x48;code[n++]=0xbb;*(u64*)(code+n)=WX_USER_STACK+WX_SERVICE_SAMPLE_OFFSET;n+=8;
     }
     code[n++]=0x83;code[n++]=0x43;code[n++]=8;code[n++]=1;
-    code[n++]=0xb8;*(u32*)(code+n)=WX_NATIVE_YIELD;n+=4;
+    /* Sleep is a real blocking native syscall. IRQ0 continues to tick
+     * while this process is excluded from the ready queue. */
+    code[n++]=0xb8;*(u32*)(code+n)=WX_NATIVE_SLEEP_TICKS;n+=4;
+    code[n++]=0xbf;*(u32*)(code+n)=WX_SERVICE_POLL_TICKS;n+=4;
     code[n++]=0xcd;code[n++]=0x80;
     code[n++]=0x48;code[n++]=0xbb;*(u64*)(code+n)=WX_USER_STACK+WX_SERVICE_STOP_OFFSET;n+=8;
     code[n++]=0x80;code[n++]=0x3b;code[n++]=0;
@@ -97,6 +100,8 @@ static void wx_service_compile(wx_resident_service *s){
 static int wx_service_step(wx_resident_service *s){
     if(!s || !wx_service_running(s) || wx_active || wx_user_resume_target ||
        !s->process->space.root || !wx_sched_kernel_map_ok(&s->process->space))return 0;
+    /* Explicit stop/fault diagnostics may resume a blocked thread; ordinary
+     * idle scheduling uses wx_proc_pick_ready and never selects BLOCKED. */
     const u64 cr3=wx_read_cr3();
     wx_user_resume_target=&s->process->thread.frame;
     wx_user_yielded=0;wx_timer_preempt_triggered=0;
@@ -121,7 +126,8 @@ static int wx_service_step(wx_resident_service *s){
     wx_active=0;wx_user_resume_target=0;wx_current_service_pid=0;
     wx_proc_current_irq=0;
     s->last_run_ticks=timer_ticks;
-    s->process->next_ready_tick=timer_ticks+WX_SERVICE_POLL_TICKS;
+    if(s->process->state!=WX_PROC_BLOCKED)
+        s->process->next_ready_tick=timer_ticks+WX_SERVICE_POLL_TICKS;
     if(wx_fault_vector || !wx_exit_requested){
         s->process->exit_code=status;s->process->state=WX_PROC_FAILED;return 0;
     }
@@ -134,7 +140,9 @@ static int wx_service_step(wx_resident_service *s){
     if(wx_user_yielded){
         if(status){s->process->state=WX_PROC_FAILED;return 0;}
         s->process->thread.started=1;
-        s->process->state=WX_PROC_READY;
+        /* INT80 sleep already moved the owner to BLOCKED. Respect it. */
+        if(s->process->state!=WX_PROC_BLOCKED)
+            s->process->state=WX_PROC_READY;
         s->last_sample=*(volatile u64*)((u8*)s->process->space.stack+WX_SERVICE_SAMPLE_OFFSET);
         s->process->quanta=*(volatile u32*)((u8*)s->process->space.stack+WX_SERVICE_QUANTA_OFFSET);
         if(s->pid==402)s->last_ipc_tick=*(volatile u64*)((u8*)s->process->space.stack+WX_SERVICE_IPC_OFFSET);

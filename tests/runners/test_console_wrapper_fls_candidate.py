@@ -28,6 +28,7 @@ parser.add_argument('--check-services',action='store_true',help='Verify resident
 parser.add_argument('--check-vfs',action='store_true',help='Verify FAT16 read-only mount, root listing and file contents')
 parser.add_argument('--check-preemption',action='store_true',help='Assert PIT IRQ0 interrupts two CPU-bound non-yielding CPL3 programs')
 parser.add_argument('--check-permanent',action='store_true',help='Assert the PIC/PIT handler remains armed across workloads and services use process-manager ready queue')
+parser.add_argument('--check-sleep',action='store_true',help='Check actual CPL3 sleep syscall, BLOCKED state and PIT-driven wakeups')
 parser.add_argument('--check-process-manager',action='store_true',help='Verify repeated process spawn, exit, resource reaping and free-page invariants')
 args=parser.parse_args()
 assert re.fullmatch(r'[a-zA-Z0-9-]{1,70}',args.result_tag), 'Invalid result tag'
@@ -124,6 +125,30 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
             armed=send('sched-status','ready_selector=process_manager')
             assert 'enabled=1' in armed and 'ready_selector=process_manager' in armed
             checks.append('PIT IRQ32 remains installed after boot; managed ready selection is shared with services')
+        if args.check_sleep:
+            # Scheduler diagnostics conclude with ready_selector to avoid a
+            # torn serial read of a partially printed line.
+            initial=send('sched-status','ready_selector=process_manager')
+            def sleep_counters(out):
+                found=re.search(r'PIT_SCHED_STATUS enabled=1 blocked=(\d+) sleeps=(\d+) wakes=(\d+) ready_selector=process_manager',out)
+                assert found, out
+                return tuple(int(found.group(i)) for i in (1,2,3))
+            begin=sleep_counters(initial)
+            assert begin[0]<=2,begin
+            # Earlier tests continuously send console commands, so no idle
+            # quantum is guaranteed before we explicitly allow idle time.
+            time.sleep(.8)
+            after=sleep_counters(send('sched-status','ready_selector=process_manager'))
+            assert after[1]>begin[1],(begin,after)
+            time.sleep(.8)
+            resumed=sleep_counters(send('sched-status','ready_selector=process_manager'))
+            assert resumed[1]>after[1] and resumed[2]>after[2],(begin,after,resumed)
+            listing=send('ps','PROCESS_LIST_END')
+            assert 'PROCESS pid=401' in listing and 'PROCESS pid=402' in listing
+            checks.append('real CPL3 SLEEP_TICKS blocks services; PIT wakes threads via Process Manager, no busy loop')
+            wait_contract=send('wait-test','WAIT_TEST_OK')
+            assert 'THREAD_WAIT_OK: invalid durations rejected, BLOCKED excluded until PIT deadline' in wait_contract
+            checks.append('native sleep contract rejects invalid durations and PIT deadline wakes a managed transient thread without memory leaks')
         if args.check_process_manager:
             for cycle in range(2):
                 record=send('process-test','PROC_MANAGER_TEST_OK')

@@ -9,7 +9,7 @@
 #define WX_PROC_TRANSIENT_COUNT 4U
 #define WX_PROC_SERVICE_OFFSET 4U
 enum {WX_PROC_FREE=0,WX_PROC_READY=1,WX_PROC_RUNNING=2,
-      WX_PROC_EXITED=3,WX_PROC_FAILED=4};
+      WX_PROC_EXITED=3,WX_PROC_FAILED=4,WX_PROC_BLOCKED=5};
 /* One managed thread per CPL3 process in this phase. Its user trap-frame,
  * x87/SSE state and TSS RSP0 stack must have the same lifecycle as the PID.
  * Future multiple threads can extend this structure without parallel tables. */
@@ -43,6 +43,7 @@ static wx_managed_process *wx_proc_current_irq;
 #endif
 static u32 wx_next_process_id=600;
 static u32 wx_proc_rr_cursor;
+static u32 wx_proc_sleep_calls,wx_proc_wake_count,wx_proc_invalid_sleeps;
 
 static u32 wx_proc_free_pages(void){
     u32 available=0;
@@ -84,16 +85,44 @@ static wx_managed_process *wx_proc_resident(unsigned index,u32 pid,const char *n
 }
 static int wx_proc_alive(const wx_managed_process *p){
     return p && p->resident &&
-           (p->state==WX_PROC_READY || p->state==WX_PROC_RUNNING);
+           (p->state==WX_PROC_READY || p->state==WX_PROC_RUNNING ||
+            p->state==WX_PROC_BLOCKED);
+}
+/* Called by the native INT80 dispatch only for a verified active CPL3
+ * thread. The process's own state/next deadline is the sole sleep ledger. */
+static int wx_proc_request_sleep(u64 ticks){
+    wx_managed_process *p=wx_proc_current_irq;
+    if(!p || !wx_active || p->state!=WX_PROC_RUNNING ||
+       !ticks || ticks>1000 || timer_ticks>~0ULL-ticks){
+        wx_proc_invalid_sleeps++;
+        return 0;
+    }
+    p->next_ready_tick=timer_ticks+ticks;
+    p->state=WX_PROC_BLOCKED;
+    wx_proc_sleep_calls++;
+    return 1;
 }
 /* One ready-queue selection point for all resident processes.
  * Service policies set their next deadline but do NOT choose a second
  * scheduling order. This is one CPU, no priority/preempt-on-IRQ-switch yet. */
+/* Release expired waits for ALL managed processes, not only services.
+ * Nothing may run while state==BLOCKED. Timer tick is monotonic in this
+ * current one-CPU PIT setup; overflow is rejected when sleep is requested. */
+static void wx_proc_wake_blocked(void){
+    for(u32 i=0;i<WX_PROC_CAPACITY;i++){
+        wx_managed_process *p=&wx_process_table[i];
+        if(p->state==WX_PROC_BLOCKED && timer_ticks>=p->next_ready_tick){
+            p->state=WX_PROC_READY;
+            wx_proc_wake_count++;
+        }
+    }
+}
 static wx_managed_process *wx_proc_pick_ready(void){
+    wx_proc_wake_blocked();
     for(u32 attempt=0;attempt<WX_PROC_CAPACITY;attempt++){
         u32 index=(wx_proc_rr_cursor+attempt)%WX_PROC_CAPACITY;
         wx_managed_process *p=&wx_process_table[index];
-        if(p->state!=WX_PROC_READY || !p->resident ||
+        if(!p->resident || p->state!=WX_PROC_READY ||
            timer_ticks<p->next_ready_tick)continue;
         wx_proc_rr_cursor=(index+1)%WX_PROC_CAPACITY;
         return p;
