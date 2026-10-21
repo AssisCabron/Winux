@@ -18,6 +18,7 @@ parser.add_argument('--page-fault',action='store_true')
 parser.add_argument('--nx-fault',action='store_true')
 parser.add_argument('--data-image',type=Path,help='Explicit, file-backed Winux FAT volume for UEFI storage installation')
 parser.add_argument('--expect-existing',action='store_true')
+parser.add_argument('--expect-untagged',action='store_true',help='Require that no writes occur to an untagged FAT volume')
 parser.add_argument('--iso',type=Path,help='Override ISO under the project root or provide an absolute path')
 parser.add_argument('--result-tag',default='console-wrapper-fls-candidate',help='Safe output prefix')
 parser.add_argument('--check-nt-missing',action='store_true',help='Check bounded unknown NT syscall trace')
@@ -81,11 +82,17 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
             before=len(output);serial.sendall((line+'\r').encode());return wait_for(expected,before)
         wait_for('KERNEL: CONSOLE_READY',timeout=45)
         if args.data_image:
-            expected='WINUX_STORAGE: EXISTING' if args.expect_existing else 'WINUX_STORAGE: INSTALLED'
-            assert expected in output, output[:2000]
-            status=send('storage-status','accounts=SETUP_REQUIRED')
-            assert 'installed=1' in status and 'failed=0' in status and 'accounts=SETUP_REQUIRED' in status
-            checks.append('UEFI FAT system directories installed or reused only on Winux-tagged volume')
+            if args.expect_untagged:
+                assert 'WINUX_STORAGE: NO_TAGGED_VOLUME' in output,output[:2000]
+                status=send('storage-status','accounts=SETUP_REQUIRED')
+                assert 'found=0 installed=0' in status and 'failed=0' in status
+                checks.append('UEFI installer refuses untagged volumes')
+            else:
+                expected='WINUX_STORAGE: EXISTING' if args.expect_existing else 'WINUX_STORAGE: INSTALLED'
+                assert expected in output, output[:2000]
+                status=send('storage-status','accounts=SETUP_REQUIRED')
+                assert 'installed=1' in status and 'failed=0' in status and 'accounts=SETUP_REQUIRED' in status
+                checks.append('UEFI FAT system directories installed or reused only on Winux-tagged volume')
         assert 'AFTER_EXIT_BOOT_SERVICES' in output and '[OK] Reserved page allocator' in output
         checks.append('post-firmware console and allocator self-test')
         assert 'KERNEL: OWN_CR3_ACTIVE WP NX' in output
@@ -334,7 +341,7 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
 (build/f'{tag}-serial.log').write_text(output,encoding='utf8')
 result={'passed':failure is None,'failure':failure,'seconds':round(time.monotonic()-start,2),
  'iso_sha256':hashlib.sha256(iso.read_bytes()).hexdigest(),'command':command,'checks':checks,
- 'not_tested':['general Windows applications and drivers','user mode','user-mode page isolation','physical hardware','USB keyboard','SMP']}
+ 'not_tested':['general Windows applications and drivers','multi-process CPL3 lifecycle','per-process CR3 isolation','physical hardware','USB keyboard','SMP']}
 (build/f'{tag}-test.json').write_text(json.dumps(result,indent=2))
 print(output[-10000:]);print(json.dumps(result,indent=2))
 sys.exit(0 if failure is None else 1)

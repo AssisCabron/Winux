@@ -157,6 +157,16 @@ static int wx_ring3_test(void) {
     result=wx_enter_user(WX_USER_CODE,WX_USER_STACK+4096-16);
     wx_active=0;
     if(result!=98||wx_fault_vector!=14||(wx_fault_error&4ULL)==0)ok=0;
+    /* In/Out are privileged while IOPL=0 and TSS I/O permission map is disabled. */
+    if(!pg_protect_user(WX_USER_CODE,1,0))ok=0;
+    pg_zero(p,32);
+    p[0]=0xe4;p[1]=0x80; /* in al,0x80: must raise #GP in CPL3 */
+    p[2]=0x0f;p[3]=0x0b;
+    if(!pg_protect_user(WX_USER_CODE,0,1))ok=0;
+    wx_active=1;wx_exit_requested=0;wx_exit_code=0;wx_fault_vector=0;
+    result=wx_enter_user(WX_USER_CODE,WX_USER_STACK+4096-16);
+    wx_active=0;
+    if(result!=97||wx_fault_vector!=13)ok=0;
     pg_unmap(WX_USER_CODE);pg_unmap(WX_USER_STACK);
     page_free(code);page_free(stack);
     if(ok)print("RING3_TEST_OK: CPL3 syscall write/exit, supervisor page access denied, kernel survived\n");

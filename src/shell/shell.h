@@ -161,6 +161,10 @@ static int pe_test(void) {
 #ifdef WINUX_RING3_PREVIEW
 #include "../arch/x86_64/ring3_preview.h"
 #endif
+#ifdef WINUX_BLOCK_PREVIEW
+#include "../storage/block_core.h"
+#include "../storage/virtio_blk_legacy.h"
+#endif
 
 static void command(char *line, unsigned depth) {
     while (*line == ' ')line++;
@@ -223,6 +227,9 @@ static void command(char *line, unsigned depth) {
         print(" accounts=SETUP_REQUIRED\n");
     }
 #endif
+    #ifdef WINUX_BLOCK_PREVIEW
+    else if (same(line,"block-test"))print(wx_block_device_test() ? "BLOCK_TEST_OK\n" : "BLOCK_TEST_FAILED\n");
+    #endif
     else if (same(line, "nt-missing"))nt_missing_report();
     else if (same(line, "nt-missing-reset")){nt_missing_reset();print("NT_MISSING_RESET_OK\n");}
     else if (same(line, "nt-stub-test"))print(nt_stub_test() ? "NT_STUB_OK\n" : "NT_STUB_FAILED\n");

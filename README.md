@@ -2,6 +2,8 @@
 
 ISO estavel atual: `build/winux-0.38-x64.iso`, SHA-256 `700e6a38c0b7dbe312b6012810728af8ecd24a984cd8287e0f644a73f1c343b0`.
 
+**Branch experimental Ring 3 e armazenamento UEFI:** [docs/USERSPACE-IDENTITY-STORAGE.md](docs/USERSPACE-IDENTITY-STORAGE.md). O prototipo usa codigo CPL3 real, gate de syscall nativo, falhas de acesso a paginas supervisor e I/O privilegiado com recuperacao, e cria SYSTEM/CONFIG, USERS e demais diretórios num disco FAT16 exclusivamente marcado WINUX-DATA-V1. A verificacao de reboot preserva os arquivos; volumes sem assinatura nao sao modificados. A autenticacao de contas, filesystem apos ExitBootServices, scheduler e processos isolados ainda NAO existem. Nao e a ISO 0.38 estavel.
+
 **Teste da DLL Windows propria:** [docs/WINDOWS-DLL-COMPATIBILITY.md](docs/WINDOWS-DLL-COMPATIBILITY.md). A mesma winuxplugin.dll e o mesmo plugintest.exe passaram no Windows e no Winux P4 (QEMU, 39 verificacoes). O teste e restrito a uma fixture confiavel em CPL0; nao habilita DLLs arbitrarias.
 
 **Estrutura atual do codigo, subsistemas, testes e builds:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). As variantes P1-P4 estao em `experiments/candidates/`, scripts de compilacao em `scripts/build/`, verificacoes em `tests/runners/` e probes em `tests/probes/`.
