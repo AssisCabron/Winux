@@ -40,24 +40,32 @@ static int page_free(void *p) {
 }
 
 static int pool_test(void) {
-    /* Diagnostic scratch, single-thread shell only; avoid a large kernel stack frame. */
+    /* Test exhaustion of the pages ACTUALLY free now. Long-lived CPL3
+     * processes may own physical pages legitimately; never touch those. */
     static void *p[PAGE_POOL_COUNT];
-    unsigned count = 0;
-    int ok = 1;
-    for (; count < PAGE_POOL_COUNT; count++) {
-        p[count] = page_alloc();
-        if (!p[count]) {
-            ok = 0;
-            break;
-        }
-        ((u8 *) p[count])[0] = 0xa5;
+    unsigned free_at_entry=0,count=0;
+    for(unsigned i=0;i<PAGE_POOL_COUNT;i++)
+        if(!page_used[i])free_at_entry++;
+    int ok=1;
+    u32 pool_error=0;
+    for (;count<free_at_entry;count++) {
+        p[count]=page_alloc();
+        if(!p[count]){ok=0;pool_error|=1;break;}
+        ((u8*)p[count])[0]=0xa5;
     }
-    if (count == PAGE_POOL_COUNT && page_alloc())ok = 0;
-    for (unsigned i = 0; i < count; i++)if (!page_free(p[i]))ok = 0;
-    if (count && page_free(p[0]))ok = 0;
-    void *q = page_alloc();
-    if (!q || *(u8 *) q)ok = 0;
-    if (q)page_free(q);
+    if(count==free_at_entry && page_alloc()){ok=0;pool_error|=2;}
+    for(unsigned i=0;i<count;i++)if(!page_free(p[i])){ok=0;pool_error|=4;}
+    if(count && page_free(p[0])){ok=0;pool_error|=8;}
+    if(free_at_entry){
+        void *q=page_alloc();
+        if(!q || *(u8*)q){ok=0;pool_error|=16;}
+        if(q)page_free(q);
+    }
+    unsigned free_at_exit=0;
+    for(unsigned i=0;i<PAGE_POOL_COUNT;i++)
+        if(!page_used[i])free_at_exit++;
+    if(free_at_exit!=free_at_entry){ok=0;pool_error|=32;}
+    if(!ok){print("POOL_TEST_DIAG: flags=");number(pool_error);print(" free_before=");number(free_at_entry);print(" allocated=");number(count);print(" free_after=");number(free_at_exit);print("\n");}
     return ok;
 }
 
@@ -164,6 +172,9 @@ static int pe_test(void) {
 #include "../process/address_space_preview.h"
 #ifdef WINUX_SCHED_PREVIEW
 #include "../process/scheduler_preview.h"
+#ifdef WINUX_SERVICE_PREVIEW
+#include "../process/service_manager_preview.h"
+#endif
 #endif
 #endif
 #endif
@@ -243,6 +254,19 @@ static void command(char *line, unsigned depth) {
 #endif
 #ifdef WINUX_SCHED_PREVIEW
     else if (same(line, "sched-test"))print(wx_scheduler_test() ? "SCHED_TEST_OK\n" : "SCHED_TEST_FAILED\n");
+#endif
+#ifdef WINUX_SERVICE_PREVIEW
+    else if(same(line,"ps"))wx_process_list();
+    else if(same(line,"services"))wx_service_status();
+    else if(same(line,"svc") && same(arg,"start clockd"))
+        print(wx_service_start()?"SERVICE_START_OK\n":"SERVICE_START_REJECTED\n");
+    else if(same(line,"svc") && same(arg,"stop clockd"))
+        print(wx_service_stop()?"SERVICE_STOP_OK\n":"SERVICE_STOP_FAILED\n");
+    else if(same(line,"svc") && same(arg,"restart clockd")){
+        int was_running=wx_clock_service.state==WX_SERVICE_RUNNING;
+        int stopped=!was_running || wx_service_stop();
+        print(stopped&&wx_service_start()?"SERVICE_RESTART_OK\n":"SERVICE_RESTART_FAILED\n");
+    }
 #endif
     else if (same(line, "nt-missing"))nt_missing_report();
     else if (same(line, "nt-missing-reset")){nt_missing_reset();print("NT_MISSING_RESET_OK\n");}
@@ -355,6 +379,10 @@ static void shell(void) {
     char line[128];
     unsigned at = 0;
     int previous_cr = 0;
+#ifdef WINUX_SERVICE_PREVIEW
+    /* Auto-start one REAL CPL3 clock sampling service for this preview only. */
+    if(!wx_service_start())serial("SERVICE_BOOT_FAILED\r\n");
+#endif
     print("\nType help to begin.\nwinux> ");
     serial("KERNEL: CONSOLE_READY\r\n");
     for (;;) {
@@ -386,7 +414,14 @@ static void shell(void) {
             }
         } else {
             idle_wakes++;
-            __asm__ volatile("sti; hlt":::"memory");
+            __asm__ volatile("sti":::"memory");
+#ifdef WINUX_SERVICE_PREVIEW
+            /* The same shell idle loop is our cooperative scheduling point.
+             * Every quantum uses the REAL CPL3 syscall and isolated CR3. */
+            if(!wx_service_poll())__asm__ volatile("hlt":::"memory");
+#else
+            __asm__ volatile("hlt":::"memory");
+#endif
         }
     }
 }

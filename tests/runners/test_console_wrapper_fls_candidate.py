@@ -24,6 +24,7 @@ parser.add_argument('--block-image',type=Path,help='Read-only expendable block f
 parser.add_argument('--check-proc-space',action='store_true',help='Execute two CPL3 tasks in independent CR3 address spaces')
 parser.add_argument('--check-scheduler',action='store_true',help='Verify real Win64 stack/CR3 context switching and cooperative yields')
 parser.add_argument('--check-user-scheduler',action='store_true',help='Require two CPL3 process continuations to resume after native yield')
+parser.add_argument('--check-services',action='store_true',help='Verify resident CPL3 clockd autostart, scheduling, listing, stop and restart')
 args=parser.parse_args()
 assert re.fullmatch(r'[a-zA-Z0-9-]{1,70}',args.result_tag), 'Invalid result tag'
 tag='page-fault' if args.page_fault else ('nx-fault' if args.nx_fault else ('fault' if args.fault else args.result_tag))
@@ -110,6 +111,50 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
                 assert 'PROC_SPACE_OK: 2 independent CR3 roots' in proc_text
                 assert 'CPL3 exits 21/42/21' in proc_text
             checks.append('two cycles of independent user CR3/page tables, same VA, distinct frames and safe teardown')
+        if args.check_services:
+            first=send('services','SERVICE_LIST_END')
+            matched=re.search(r'SERVICE clockd pid=401 state=RUNNING generation=(\d+) quanta=(\d+) last_pit_tick=(\d+)',first)
+            assert matched,first[-1500:]
+            generation=int(matched.group(1))
+            first_runs=int(matched.group(2))
+            first_ticks=int(matched.group(3))
+            listing=send('ps','PROCESS_LIST_END')
+            assert 'PROCESS pid=401 name=clockd cpl=3 state=RUNNING cr3=' in listing
+            initial_cr3=re.search(r'cr3=(0x[0-9a-f]{16})',listing)
+            assert initial_cr3
+            page_report=send('mem','free pages, 4 KiB each')
+            initial_free=re.search(r'Reserved kernel pool: (\d+) / (\d+) free pages',page_report)
+            assert initial_free
+            assert 'SERVICE_START_REJECTED' in send('svc start clockd','SERVICE_START_REJECTED')
+            time.sleep(.75)
+            second=send('services','SERVICE_LIST_END')
+            observed=re.search(r'SERVICE clockd pid=401 state=RUNNING generation=(\d+) quanta=(\d+) last_pit_tick=(\d+)',second)
+            assert observed and int(observed.group(1))==generation
+            assert int(observed.group(2))>first_runs,(first,second)
+            assert int(observed.group(3))>first_ticks,(first,second)
+            checks.append('resident CPL3 clockd runs in shell idle, queries real PIT ticks and appears in ps/services')
+            send('svc stop clockd','SERVICE_STOP_OK')
+            stopped=send('services','SERVICE_LIST_END')
+            assert re.search(r'SERVICE clockd pid=0 state=STOPPED generation=(\d+)',stopped)
+            assert 'PROCESS pid=401' not in send('ps','PROCESS_LIST_END')
+            send('svc stop clockd','SERVICE_STOP_FAILED')
+            send('svc restart clockd','SERVICE_RESTART_OK')
+            restarted=send('services','SERVICE_LIST_END')
+            state=re.search(r'SERVICE clockd pid=401 state=RUNNING generation=(\d+) quanta=(\d+)',restarted)
+            assert state and int(state.group(1))==generation+1
+            restarted_listing=send('ps','PROCESS_LIST_END')
+            assert 'cr3='+initial_cr3.group(1) in restarted_listing
+            current_pool=send('mem','free pages, 4 KiB each')
+            free_after=re.search(r'Reserved kernel pool: (\d+) / (\d+) free pages',current_pool)
+            assert free_after and free_after.groups()==initial_free.groups(),(page_report,current_pool)
+            time.sleep(.75)
+            active=send('services','SERVICE_LIST_END')
+            current=re.search(r'SERVICE clockd pid=401 state=RUNNING generation=(\d+) quanta=(\d+)',active)
+            assert current and int(current.group(2))>=1
+            send('svc stop clockd','SERVICE_STOP_OK')
+            assert 'state=STOPPED' in send('services','SERVICE_LIST_END')
+            checks.append('CPL3 service stop/restart/reap reuses process memory and removes exited PID from ps')
+            checks.append('service lifecycle rejects invalid transitions and retains CR3/page-pool counts across restart')
         assert 'AFTER_EXIT_BOOT_SERVICES' in output and '[OK] Reserved page allocator' in output
         checks.append('post-firmware console and allocator self-test')
         assert 'KERNEL: OWN_CR3_ACTIVE WP NX' in output
