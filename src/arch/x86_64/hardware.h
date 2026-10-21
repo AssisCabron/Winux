@@ -15,7 +15,11 @@ typedef struct __attribute__((packed)) {
 } idt_pointer;
 
 static idt_gate idt[256] __attribute__((aligned(16)));
+#ifdef WINUX_RING3_PREVIEW
+static u64 kernel_gdt[7] __attribute__((aligned(16))) = {0, 0x00af9a000000ffffULL, 0x00cf92000000ffffULL};
+#else
 static u64 kernel_gdt[3] __attribute__((aligned(16))) = {0, 0x00af9a000000ffffULL, 0x00cf92000000ffffULL};
+#endif
 
 __attribute__((naked)) static void reload_segments(void) {
     __asm__ volatile(

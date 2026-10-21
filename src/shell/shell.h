@@ -158,6 +158,10 @@ static int pe_test(void) {
 #include "../tests/memory/nt_heap_bootstrap_test.h"
 #include "../tests/objects/nt_object_test.h"
 
+#ifdef WINUX_RING3_PREVIEW
+#include "../arch/x86_64/ring3_preview.h"
+#endif
+
 static void command(char *line, unsigned depth) {
     while (*line == ' ')line++;
     if (!*line || *line == '#')return;
@@ -207,6 +211,9 @@ static void command(char *line, unsigned depth) {
                   ? "VM_REGIONS_OK: reserve, commit, rollback, protect, decommit, release\n"
                   : "VM_REGIONS_FAILED\n");
     else if (same(line, "vm-query-test"))print(vm_query_test() ? "VM_QUERY_OK\n" : "VM_QUERY_FAILED\n");
+#ifdef WINUX_RING3_PREVIEW
+    else if (same(line, "ring3-test"))print(wx_ring3_test() ? "RING3_SMOKE_OK\n" : "RING3_SMOKE_FAILED\n");
+#endif
     else if (same(line, "nt-missing"))nt_missing_report();
     else if (same(line, "nt-missing-reset")){nt_missing_reset();print("NT_MISSING_RESET_OK\n");}
     else if (same(line, "nt-stub-test"))print(nt_stub_test() ? "NT_STUB_OK\n" : "NT_STUB_FAILED\n");

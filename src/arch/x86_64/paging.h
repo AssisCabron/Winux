@@ -3,6 +3,7 @@
  * provides 4 KiB mappings. This is not user-mode isolation or a general VMM. */
 #define PG_PRESENT 1ULL
 #define PG_WRITE 2ULL
+#define PG_USER 4ULL
 #define PG_NX (1ULL<<63)
 #define PG_MASK 0x000ffffffffff000ULL
 #define PG_WINDOW 0x100000000ULL
@@ -67,6 +68,44 @@ static int pg_unmap(u64 va) {
     pg_flush(va);
     return 1;
 }
+
+#ifdef WINUX_RING3_PREVIEW
+/* User mappings share the preview address space, while every kernel/identity
+ * leaf remains supervisor-only. This is NOT per-process CR3 isolation. */
+static u64 *pg_user_leaf(u64 va, int create) {
+    if(va<PG_WINDOW || va>=PG_WINDOW+PG_WINDOW_SIZE)return 0;
+    u64 *table=pg_root;
+    const unsigned shifts[]={39,30,21};
+    for(unsigned level=0;level<3;level++){
+        u64 *entry=&table[(va>>shifts[level])&511];
+        if(!(*entry&PG_PRESENT)){
+            if(!create)return 0;
+            u64 *next=pg_new();
+            if(!next)return 0;
+            *entry=(u64)next|PG_PRESENT|PG_WRITE|PG_USER;
+        }else{
+            if(*entry&128ULL)return 0;
+            *entry|=PG_USER;
+        }
+        table=(u64*)(*entry&PG_MASK);
+    }
+    return &table[(va>>12)&511];
+}
+static int pg_map_user(u64 va,u64 pa,int writable,int executable) {
+    if(!pg_ready||(va&4095)||(pa&4095)||!pg_low(pa,4096)|| (writable&&executable))return 0;
+    u64 *e=pg_user_leaf(va,1);
+    if(!e||(*e&PG_PRESENT))return 0;
+    *e=pa|PG_PRESENT|PG_USER|(writable?PG_WRITE:0)|(executable?0:PG_NX);
+    pg_flush(va);return 1;
+}
+static int pg_protect_user(u64 va,int writable,int executable) {
+    if(!pg_ready||(va&4095)||(writable&&executable))return 0;
+    u64 *e=pg_user_leaf(va,0);
+    if(!e||((*e&(PG_PRESENT|PG_USER))!=(PG_PRESENT|PG_USER)))return 0;
+    *e=(*e&PG_MASK)|PG_PRESENT|PG_USER|(writable?PG_WRITE:0)|(executable?0:PG_NX);
+    pg_flush(va);return 1;
+}
+#endif
 
 /* One fixed shared-data page for validated local NTDLL syscall stubs only.
  * Split its identity-mapped 2 MiB leaf; neighboring mappings stay unchanged. */
