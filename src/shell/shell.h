@@ -160,6 +160,18 @@ static int pe_test(void) {
 
 #ifdef WINUX_RING3_PREVIEW
 #include "../arch/x86_64/ring3_preview.h"
+#ifdef WINUX_PROC_SPACE_PREVIEW
+#include "../process/address_space_preview.h"
+#ifdef WINUX_SCHED_PREVIEW
+#include "../process/scheduler_preview.h"
+#endif
+#endif
+#endif
+#ifdef WINUX_BLOCK_PREVIEW
+#include "../storage/block_core.h"
+#include "../device/pci_pnp.h"
+#include "../device/dma.h"
+#include "../storage/virtio_blk_legacy.h"
 #endif
 
 static void command(char *line, unsigned depth) {
@@ -222,6 +234,15 @@ static void command(char *line, unsigned depth) {
         print(" failed=");number(wx_storage_failed);
         print(" accounts=SETUP_REQUIRED\n");
     }
+#endif
+    #ifdef WINUX_BLOCK_PREVIEW
+    else if (same(line,"block-test"))print(wx_block_device_test() ? "BLOCK_TEST_OK\n" : "BLOCK_TEST_FAILED\n");
+    #endif
+#ifdef WINUX_PROC_SPACE_PREVIEW
+    else if (same(line, "proc-space-test"))print(wx_address_space_test() ? "PROC_TEST_OK\n" : "PROC_TEST_FAILED\n");
+#endif
+#ifdef WINUX_SCHED_PREVIEW
+    else if (same(line, "sched-test"))print(wx_scheduler_test() ? "SCHED_TEST_OK\n" : "SCHED_TEST_FAILED\n");
 #endif
     else if (same(line, "nt-missing"))nt_missing_report();
     else if (same(line, "nt-missing-reset")){nt_missing_reset();print("NT_MISSING_RESET_OK\n");}

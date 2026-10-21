@@ -20,6 +20,10 @@ parser.add_argument('--iso',type=Path,help='Override ISO under the project root 
 parser.add_argument('--result-tag',default='console-wrapper-fls-candidate',help='Safe output prefix')
 parser.add_argument('--check-nt-missing',action='store_true',help='Check bounded unknown NT syscall trace')
 parser.add_argument('--check-plugin',action='store_true',help='Exercise trusted custom Windows DLL and host fixture')
+parser.add_argument('--block-image',type=Path,help='Read-only expendable block fixture located under build/')
+parser.add_argument('--check-proc-space',action='store_true',help='Execute two CPL3 tasks in independent CR3 address spaces')
+parser.add_argument('--check-scheduler',action='store_true',help='Verify real Win64 stack/CR3 context switching and cooperative yields')
+parser.add_argument('--check-user-scheduler',action='store_true',help='Require two CPL3 process continuations to resume after native yield')
 args=parser.parse_args()
 assert re.fullmatch(r'[a-zA-Z0-9-]{1,70}',args.result_tag), 'Invalid result tag'
 tag='page-fault' if args.page_fault else ('nx-fault' if args.nx_fault else ('fault' if args.fault else args.result_tag))
@@ -39,6 +43,12 @@ command=[str(qemu),'-machine','q35','-accel','tcg','-m','256M','-smp','1',
  '-cdrom',str(iso),'-boot','d','-display','none','-nic','none','-no-reboot',
  '-serial',f'tcp:127.0.0.1:{serial_port},server=on,wait=off',
  '-qmp',f'tcp:127.0.0.1:{qmp_port},server=on,wait=off']
+if args.block_image:
+    block_image=(root/args.block_image if not args.block_image.is_absolute() else args.block_image).resolve()
+    assert block_image.is_file() and (root/'build') in block_image.parents and block_image.suffix.lower()=='.img'
+    assert block_image.name=='driver-test-disk.img' and block_image.stat().st_size==4096*512
+    command += ['-drive',f'if=none,id=winux-block-test,file={block_image},format=raw,readonly=on',
+                '-device','virtio-blk-pci,drive=winux-block-test,disable-modern=on']
 output='';checks=[];start=time.monotonic();failure=None
 decoder=codecs.getincrementaldecoder('utf-8')('replace')
 def connect(port):
@@ -74,6 +84,30 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
         def send(line,expected):
             before=len(output);serial.sendall((line+'\r').encode());return wait_for(expected,before)
         wait_for('KERNEL: CONSOLE_READY',timeout=45)
+        if args.block_image:
+            block_text=send('block-test','BLOCK_TEST_OK')
+            assert 'PNP_DMA_GUARD_OK: PCI exact match' in block_text
+            assert 'BLOCK_READ_OK: post-UEFI PCI legacy VirtIO' in block_text
+            assert 'driver=virtio-blk-legacy sectors=4096 sector_size=512' in block_text
+            checks.append('post-UEFI real PCI VirtIO-blk DMA reads sectors 0 and 16 twice from read-only disk')
+        if args.check_scheduler:
+            for cycle in range(2):
+                sched_text=send('sched-test','SCHED_TEST_OK')
+                assert 'SCHED_CONTEXT_OK: 2 task stacks' in sched_text
+                assert '2 CR3, 6 yields, exit teardown' in sched_text
+                assert 'SCHED_OBJECT_NAMESPACE_OK: 2 independent NT handle tables' in sched_text
+                assert 'SCHED_FPU_FLAGS_OK: task-specific MXCSR' in sched_text
+                if args.check_user_scheduler:
+                    assert 'CPL3_SCHED_OK: 2 processes resumed after native yield' in sched_text
+            if args.check_user_scheduler:
+                checks.append('two successive cycles of two CPL3 processes yield/resume in isolated CR3 roots')
+            checks.append('two cycles of cooperative kernel context switching, FPU, handles and teardown')
+        if args.check_proc_space:
+            for cycle in range(2):
+                proc_text=send('proc-space-test','PROC_TEST_OK')
+                assert 'PROC_SPACE_OK: 2 independent CR3 roots' in proc_text
+                assert 'CPL3 exits 21/42/21' in proc_text
+            checks.append('two cycles of independent user CR3/page tables, same VA, distinct frames and safe teardown')
         assert 'AFTER_EXIT_BOOT_SERVICES' in output and '[OK] Reserved page allocator' in output
         checks.append('post-firmware console and allocator self-test')
         assert 'KERNEL: OWN_CR3_ACTIVE WP NX' in output

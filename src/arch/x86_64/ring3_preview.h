@@ -19,8 +19,20 @@ _Static_assert(sizeof(wx_tss64)==104, "x86-64 TSS must be 104 bytes");
 static wx_tss64 wx_tss;
 static u8 wx_sys_stack[16384] __attribute__((aligned(16)));
 static volatile u64 wx_saved_rsp __attribute__((used));
+static volatile u64 wx_saved_kernel_rflags __attribute__((used));
 static volatile u64 wx_fault_vector,wx_fault_error;
 static volatile u32 wx_active,wx_exit_code,wx_write_count,wx_exit_requested;
+#ifdef WINUX_USER_SCHED_PREVIEW
+/* Snapshot of all registers as pushed by wx_sys_gate, plus the user iret frame.
+ * Only one user guest is inside this kernel at a time. Each task owns its
+ * saved frame; the global points at the running task's frame during a trap. */
+typedef struct {
+    u64 regs[15];
+    u64 rip,rsp,rflags;
+} wx_user_resume_frame;
+static wx_user_resume_frame *wx_user_resume_target;
+static volatile u32 wx_user_yielded;
+#endif
 /* Kernel faults remain fatal; only faults originating in CPL3 are recovered. */
 
 __attribute__((naked,used)) static void wx_ring3_restore(void) {
@@ -29,7 +41,10 @@ __attribute__((naked,used)) static void wx_ring3_restore(void) {
       "movw $16,%ax; movw %ax,%ds; movw %ax,%es; movw %ax,%fs; movw %ax,%gs;"
       "movl wx_exit_code(%rip),%eax;"
       "popq %r15; popq %r14; popq %r13; popq %r12;"
-      "popq %rsi; popq %rdi; popq %rbx; popq %rbp; ret");
+      "popq %rsi; popq %rdi; popq %rbx; popq %rbp;"
+      /* IRETQ does not run when we intentionally leave a CPL3 syscall.
+       * Restore the prior kernel flags, especially IF, before RET. */
+      "pushq wx_saved_kernel_rflags(%rip); popfq; ret");
 }
 __attribute__((naked)) static void wx_user_gp(void) {
     __asm__ volatile(
@@ -49,17 +64,41 @@ __attribute__((naked)) static void wx_user_pf(void) {
       "movl $98,wx_exit_code(%rip); jmp wx_ring3_restore;"
       "1: movq $14,%rcx; movq (%rsp),%rdx; subq $40,%rsp; call kernel_fault; ud2");
 }
+/* Verify the CURRENT CR3 and all four user/supervisor boundaries, not
+ * the global kernel root (which would validate the wrong process mapping). */
 static int wx_user_readable(u64 addr,u64 size) {
-    if (!size || size>WX_NATIVE_MAX_WRITE || addr<WX_USER_CODE || addr>WX_USER_CODE+4096-size)return 0;
-    for (u64 va=addr&~4095ULL;va<addr+size;va+=4096) {
-        u64 *leaf=pg_leaf(va,0);
-        if (!leaf || !(*leaf & (PG_PRESENT|4ULL)) || ((*leaf&5ULL)!=5ULL))return 0;
+    if (!size || size>WX_NATIVE_MAX_WRITE || addr<WX_USER_CODE ||
+        size>4096 || addr>WX_USER_CODE+4096-size)return 0;
+    u64 cr3;
+    __asm__ volatile("mov %%cr3,%0":"=r"(cr3));
+    u64 *table=(u64*)(cr3&PG_MASK);
+    const unsigned shifts[]={39,30,21};
+    for(unsigned i=0;i<3;i++){
+        u64 value=table[(addr>>shifts[i])&511];
+        if((value&(PG_PRESENT|PG_USER))!=(PG_PRESENT|PG_USER) ||
+           (value&128ULL))return 0;
+        table=(u64*)(value&PG_MASK);
     }
-    return 1;
+    u64 leaf=table[(addr>>12)&511];
+    return (leaf&(PG_PRESENT|PG_USER))==(PG_PRESENT|PG_USER);
 }
 /* Frame saved in order rax, rcx, rdx, rbx, rbp, rsi, rdi, r8 ... r15. */
 __attribute__((used,noinline)) static void wx_sys_dispatch(u64 *frame) {
     u64 number=frame[0],arg0=frame[6],arg1=frame[5],arg2=frame[2];
+#ifdef WINUX_USER_SCHED_PREVIEW
+    if(number==WX_NATIVE_YIELD && wx_user_resume_target){
+        /* The guest sees 0 as the return value of yield when it resumes. */
+        frame[0]=0;
+        for(unsigned i=0;i<15;i++)wx_user_resume_target->regs[i]=frame[i];
+        wx_user_resume_target->rip=frame[15];
+        wx_user_resume_target->rflags=frame[17];
+        wx_user_resume_target->rsp=frame[18];
+        wx_user_yielded=1;
+        wx_exit_requested=1;
+        wx_exit_code=0;
+        return;
+    }
+#endif
     if (number==WX_NATIVE_EXIT) {
         wx_exit_code=(u32)arg0;
         wx_exit_requested=1;
@@ -90,11 +129,36 @@ __attribute__((naked,noinline)) static u32 wx_enter_user(u64 start,u64 stack_top
       "pushq %rbp; pushq %rbx; pushq %rdi; pushq %rsi;"
       "pushq %r12; pushq %r13; pushq %r14; pushq %r15;"
       "movq %rsp,wx_saved_rsp(%rip);"
+      "pushfq; popq wx_saved_kernel_rflags(%rip);"
       "movw $0x1b,%ax; movw %ax,%ds; movw %ax,%es; movw %ax,%fs; movw %ax,%gs;"
       "pushq $0x1b; pushq %rdx; pushfq;"
       "orq $0x200,(%rsp); andq $-1025,(%rsp);"
       "pushq $0x23; pushq %rcx; iretq");
 }
+#ifdef WINUX_USER_SCHED_PREVIEW
+/* C caller explicitly uses Microsoft x64 ABI: argument in RCX. The frame
+ * restores ALL user GPRs and the 5-word ring-3 IRETQ return frame.
+ * Kernel nonvolatile registers are parked for wx_ring3_restore, as in
+ * wx_enter_user. This is the cooperative syscall boundary, not IRQ preemption. */
+__attribute__((naked,noinline,ms_abi)) static u32
+wx_resume_user(const wx_user_resume_frame *frame) {
+    __asm__ volatile(
+      "pushq %rbp; pushq %rbx; pushq %rdi; pushq %rsi;"
+      "pushq %r12; pushq %r13; pushq %r14; pushq %r15;"
+      "movq %rsp,wx_saved_rsp(%rip);"
+      "pushfq; popq wx_saved_kernel_rflags(%rip);"
+      "movq %rcx,%rbx;"
+      "movw $0x1b,%ax; movw %ax,%ds; movw %ax,%es; movw %ax,%fs; movw %ax,%gs;"
+      "pushq $0x1b; pushq 128(%rbx);"
+      "pushq 136(%rbx); pushq $0x23; pushq 120(%rbx);"
+      "movq 0(%rbx),%rax; movq 16(%rbx),%rdx; movq 32(%rbx),%rbp;"
+      "movq 40(%rbx),%rsi; movq 48(%rbx),%rdi;"
+      "movq 56(%rbx),%r8; movq 64(%rbx),%r9; movq 72(%rbx),%r10;"
+      "movq 80(%rbx),%r11; movq 88(%rbx),%r12; movq 96(%rbx),%r13;"
+      "movq 104(%rbx),%r14; movq 112(%rbx),%r15;"
+      "movq 8(%rbx),%rcx; movq 24(%rbx),%rbx; iretq");
+}
+#endif
 static int wx_prepare_tss(void) {
     pg_zero(&wx_tss,sizeof(wx_tss));
     wx_tss.rsp0=((u64)wx_sys_stack+sizeof(wx_sys_stack)) & ~15ULL;
@@ -157,6 +221,16 @@ static int wx_ring3_test(void) {
     result=wx_enter_user(WX_USER_CODE,WX_USER_STACK+4096-16);
     wx_active=0;
     if(result!=98||wx_fault_vector!=14||(wx_fault_error&4ULL)==0)ok=0;
+    /* In/Out are privileged while IOPL=0 and TSS I/O permission map is disabled. */
+    if(!pg_protect_user(WX_USER_CODE,1,0))ok=0;
+    pg_zero(p,32);
+    p[0]=0xe4;p[1]=0x80; /* in al,0x80: must raise #GP in CPL3 */
+    p[2]=0x0f;p[3]=0x0b;
+    if(!pg_protect_user(WX_USER_CODE,0,1))ok=0;
+    wx_active=1;wx_exit_requested=0;wx_exit_code=0;wx_fault_vector=0;
+    result=wx_enter_user(WX_USER_CODE,WX_USER_STACK+4096-16);
+    wx_active=0;
+    if(result!=97||wx_fault_vector!=13)ok=0;
     pg_unmap(WX_USER_CODE);pg_unmap(WX_USER_STACK);
     page_free(code);page_free(stack);
     if(ok)print("RING3_TEST_OK: CPL3 syscall write/exit, supervisor page access denied, kernel survived\n");

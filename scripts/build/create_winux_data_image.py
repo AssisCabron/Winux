@@ -2,9 +2,14 @@
 No physical drive or existing image is ever formatted or overwritten.
 """
 from pathlib import Path
-import struct,sys,json,hashlib
+import struct,sys,json,hashlib,argparse,re
 ROOT=Path(__file__).resolve().parents[2]
-OUT=ROOT/"build"/"ring3-preview"/"winux-data.img"
+parser=argparse.ArgumentParser()
+parser.add_argument('--name',default='winux-data.img',help='New image basename inside build/ring3-preview only')
+args=parser.parse_args()
+if not re.fullmatch(r'[A-Za-z0-9_-]+\.img',args.name):
+    parser.error('Only a safe image filename ending in .img is accepted')
+OUT=ROOT/"build"/"ring3-preview"/args.name
 PART_START=2048
 SECTORS=61440
 SECTOR=512
