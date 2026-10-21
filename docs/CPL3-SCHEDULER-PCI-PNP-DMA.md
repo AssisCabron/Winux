@@ -125,6 +125,15 @@ do Windows. Um arquivo SYS não passa a funcionar só por estar presente
 no diretório SYSTEM/DRIVERS. Para rede Windows ainda faltam NDIS e os
 contratos de lifecycle específicos de adaptadores.
 
+### Contrato de detach/reprobe do backend de bloco
+
+O driver nativo VirtIO-blk agora implementa desligamento explícito do hardware,
+remoção do bloco do registro compartilhado, liberação das regiões DMA, restauração
+do comando PCI e desassociação do dispositivo. O teste exercita o ciclo completo
+de remoção e nova inicialização duas vezes, sem alteração da imagem de disco.
+Esta é uma propriedade observada no QEMU com VirtIO legado; não significa
+hotplug ACPI, IOMMU, PnP Windows ou suspensão/retomada em hardware físico.
+
 ## 3. Como validar
 
 Na raiz do repositório Winux:

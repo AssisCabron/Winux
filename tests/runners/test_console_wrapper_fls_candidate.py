@@ -85,11 +85,13 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
             before=len(output);serial.sendall((line+'\r').encode());return wait_for(expected,before)
         wait_for('KERNEL: CONSOLE_READY',timeout=45)
         if args.block_image:
-            block_text=send('block-test','BLOCK_TEST_OK')
-            assert 'PNP_DMA_GUARD_OK: PCI exact match' in block_text
-            assert 'BLOCK_READ_OK: post-UEFI PCI legacy VirtIO' in block_text
-            assert 'driver=virtio-blk-legacy sectors=4096 sector_size=512' in block_text
-            checks.append('post-UEFI real PCI VirtIO-blk DMA reads sectors 0 and 16 twice from read-only disk')
+            for cycle in range(2):
+                block_text=send('block-test','BLOCK_TEST_OK')
+                assert 'PNP_DMA_GUARD_OK: PCI exact match' in block_text
+                assert 'BLOCK_READ_OK: post-UEFI PCI legacy VirtIO' in block_text
+                assert 'PNP_DEVICE_LIFECYCLE_OK: detach/reprobe' in block_text
+                assert 'driver=virtio-blk-legacy sectors=4096 sector_size=512' in block_text
+            checks.append('two post-UEFI PCI VirtIO read-only cycles with driver detachment, DMA cleanup and rebinding')
         if args.check_scheduler:
             for cycle in range(2):
                 sched_text=send('sched-test','SCHED_TEST_OK')
