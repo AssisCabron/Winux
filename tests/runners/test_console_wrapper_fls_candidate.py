@@ -125,13 +125,15 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
                 assert 'pool fully restored' in record
             checks.append('24 independent CPL3 process launches with unique PIDs, per-process NT handles and complete physical/page-table reaping')
         if args.check_preemption:
-            preempt_text=send('preempt-test','PREEMPT_TEST_OK')
-            assert 'PIT_PREEMPT_OK: IRQ32 forced two non-yielding CPL3 loops' in preempt_text
-            assert 'PIT_THREAD_STACKS_OK: separate privileged RSP0' in preempt_text
-            assert 'PIT_THREAD_FPU_OK: distinct CPL3 MXCSR values preserved' in preempt_text
-            match=re.search(r'PIT_PREEMPT_STATS: interrupts=(\d+) context_switches=(\d+)',preempt_text)
-            assert match and int(match.group(1))>=2 and int(match.group(2))==3
-            checks.append('hardware PIT IRQ32 forced two CPU-bound CPL3 programs to resume with their own saved contexts')
+            for cycle in range(2):
+                preempt_text=send('preempt-test','PREEMPT_TEST_OK')
+                assert 'PIT_PREEMPT_OK: IRQ32 forced two non-yielding CPL3 loops' in preempt_text
+                assert 'PIT_THREAD_STACKS_OK: separate privileged RSP0' in preempt_text
+                assert 'PIT_THREAD_FPU_OK: distinct CPL3 MXCSR values preserved' in preempt_text
+                assert 'PIT_PROC_MANAGER_OK: IRQ preemption used managed PIDs' in preempt_text
+                match=re.search(r'PIT_PREEMPT_STATS: interrupts=(\d+) context_switches=(\d+)',preempt_text)
+                assert match and int(match.group(1))>=2 and int(match.group(2))==3
+            checks.append('twice: IRQ32 preempts CPU-bound managed CPL3 processes with per-thread RSP0, MXCSR and resource reaping')
         if args.check_scheduler:
             for cycle in range(2):
                 sched_text=send('sched-test','SCHED_TEST_OK')
@@ -171,6 +173,31 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
             assert observed and int(observed.group(1))==generation
             assert int(observed.group(2))>first_runs,(first,second)
             assert int(observed.group(3))>first_ticks,(first,second)
+            guard=send('ipc-test','IPC_TEST_OK')
+            assert 'IPC_ACCESS_OK: source PID derived from kernel' in guard
+            clock_line=re.search(r'SERVICE clockd [^\r\n]+',second)
+            mem_line=re.search(r'SERVICE memd [^\r\n]+',second)
+            assert clock_line and mem_line
+            sent=re.search(r'sent=(\d+)',clock_line.group(0))
+            received=re.search(r'received=(\d+)',mem_line.group(0))
+            last_msg=re.search(r'last_ipc_tick=(\d+)',mem_line.group(0))
+            assert sent and received and last_msg and int(sent.group(1))>0 and int(received.group(1))>0 and int(last_msg.group(1))>0,(clock_line.group(0),mem_line.group(0))
+            assert int(last_msg.group(1))<=int(observed.group(3))
+            checks.append('CPL3 IPC: clockd sends real PIT values to memd, bounded kernel mailbox, PID checks, backpressure and reception')
+            # Deliberately trigger a genuine CPL3 page fault in memd. Only
+            # that service must fail; kernel and clockd remain operational.
+            injected=send('svc fault memd','SERVICE_FAULT_INJECTED_OK')
+            assert 'SERVICE_USER_FAULT_OK: memd CPL3 #PF isolated' in injected
+            failed_state=send('services','SERVICE_LIST_END')
+            assert re.search(r'SERVICE memd pid=0 state=FAILED generation=1',failed_state),failed_state
+            assert 'SERVICE clockd pid=401 state=RUNNING' in failed_state
+            time.sleep(.85)
+            recovered=send('services','SERVICE_LIST_END')
+            recovered_mem=re.search(r'SERVICE memd pid=402 state=RUNNING generation=(\d+) quanta=(\d+) [^\r\n]*restarts=(\d+)',recovered)
+            assert recovered_mem and int(recovered_mem.group(1))==2 and int(recovered_mem.group(3))==1,recovered
+            assert 'PROCESS pid=402 name=memd cpl=3 state=RUNNING' in send('ps','PROCESS_LIST_END')
+            assert 'SERVICE clockd pid=401 state=RUNNING' in recovered
+            checks.append('CPL3 #PF isolated to memd and supervisor restarted only the failed service, preserving clockd')
             checks.append('resident CPL3 clockd runs in shell idle, queries real PIT ticks and appears in ps/services')
             send('svc stop clockd','SERVICE_STOP_OK')
             stopped=send('services','SERVICE_LIST_END')

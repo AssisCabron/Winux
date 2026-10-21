@@ -277,6 +277,8 @@ static void command(char *line, unsigned depth) {
 #ifdef WINUX_SERVICE_PREVIEW
     else if(same(line,"ps"))wx_process_list();
     else if(same(line,"services"))wx_service_status();
+    else if(same(line,"ipc-test"))
+        print(wx_service_ipc_guard_test()?"IPC_TEST_OK\n":"IPC_TEST_FAILED\n");
     else if(same(line,"svc"))wx_service_command(arg);
 #endif
 #ifdef WINUX_VFS_PREVIEW

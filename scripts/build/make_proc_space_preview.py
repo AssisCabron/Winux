@@ -38,6 +38,6 @@ assert iso.is_file() and iso.stat().st_size>30_000_000
 for f,v in GOLD.items():assert sha(ROOT/"build"/f)==v
 result={"passed":True,"efi_sha256":sha(efi),"iso_sha256":sha(iso),
         "source":f"experiments/{EXPERIMENT}/boot.c","stable_isos_unchanged":True,
-        "warning":"Preview only: independent CR3 spaces and optionally cooperative kernel-task scheduling; no preemptive Ring3 scheduler or sessions"}
+        "warning":"Preview only: PIT IRQ preemption is opt-in within a bounded test, not always-on scheduling; no SMP or user sessions"}
 (OUT/f"{OUT_NAME}-build.json").write_text(json.dumps(result,indent=2)+"\n",encoding="utf-8")
 print(json.dumps(result,indent=2))

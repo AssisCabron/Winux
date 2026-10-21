@@ -82,6 +82,13 @@ static int wx_user_readable(u64 addr,u64 size) {
     u64 leaf=table[(addr>>12)&511];
     return (leaf&(PG_PRESENT|PG_USER))==(PG_PRESENT|PG_USER);
 }
+#ifdef WINUX_SERVICE_PREVIEW
+/* Current service identity is set by the existing CPL3 service scheduler,
+ * never provided by a userspace argument. Single CPU / no SMP. */
+static u32 wx_current_service_pid;
+static u64 wx_service_ipc_send(u32 sender_pid,u32 receiver_pid,u64 value);
+static u64 wx_service_ipc_receive(u32 receiver_pid);
+#endif
 /* Frame saved in order rax, rcx, rdx, rbx, rbp, rsi, rdi, r8 ... r15. */
 __attribute__((used,noinline)) static void wx_sys_dispatch(u64 *frame) {
     u64 number=frame[0],arg0=frame[6],arg1=frame[5],arg2=frame[2];
@@ -96,6 +103,16 @@ __attribute__((used,noinline)) static void wx_sys_dispatch(u64 *frame) {
         wx_user_yielded=1;
         wx_exit_requested=1;
         wx_exit_code=0;
+        return;
+    }
+#endif
+#ifdef WINUX_SERVICE_PREVIEW
+    if (number==WX_NATIVE_IPC_SEND) {
+        frame[0]=wx_service_ipc_send(wx_current_service_pid,(u32)arg0,arg1);
+        return;
+    }
+    if (number==WX_NATIVE_IPC_RECEIVE) {
+        frame[0]=wx_service_ipc_receive(wx_current_service_pid);
         return;
     }
 #endif
