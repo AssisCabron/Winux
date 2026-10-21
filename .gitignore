@@ -16,7 +16,6 @@
 *.ilk
 *.exp
 *.map
-*.py
 
 # Imagens de sistema e firmware
 *.iso

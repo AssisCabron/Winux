@@ -1,0 +1,6 @@
+LIBRARY winuxplugin.dll
+EXPORTS
+    WinuxPluginChecksum
+    WinuxPluginTicks
+    WinuxPluginAttached DATA
+    WinuxPluginVersion DATA

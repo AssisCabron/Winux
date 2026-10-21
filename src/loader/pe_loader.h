@@ -95,8 +95,15 @@ static void pe_load(const ram_file *f, int execute) {
         print("Dependency check complete. Entry not called.\n");
         return;
     }
-    if (!same(f->name, "hello.exe") && !same(f->name, "runtime.exe") && !same(f->name, "dlltest.exe") && !
-        same(f->name, "dllexit.exe") && !same(f->name, "tlstest.exe") && !same(f->name, "ntmemory.exe")) {
+    /* Explicit test fixture only. This is NOT an arbitrary CPL0 PE launch path. */
+#ifdef WINUX_PLUGIN_PREVIEW
+    int plugin_test_allowed = same(f->name, "plugintest.exe");
+#else
+    int plugin_test_allowed = 0;
+#endif
+    if (!plugin_test_allowed && !same(f->name, "hello.exe") && !same(f->name, "runtime.exe") &&
+        !same(f->name, "dlltest.exe") && !same(f->name, "dllexit.exe") &&
+        !same(f->name, "tlstest.exe") && !same(f->name, "ntmemory.exe")) {
         print("PE_BLOCKED: execution currently limited to bundled original contract tests.\n");
         return;
     }

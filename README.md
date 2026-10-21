@@ -2,6 +2,8 @@
 
 ISO estavel atual: `build/winux-0.38-x64.iso`, SHA-256 `700e6a38c0b7dbe312b6012810728af8ecd24a984cd8287e0f644a73f1c343b0`.
 
+**Teste da DLL Windows propria:** [docs/WINDOWS-DLL-COMPATIBILITY.md](docs/WINDOWS-DLL-COMPATIBILITY.md). A mesma winuxplugin.dll e o mesmo plugintest.exe passaram no Windows e no Winux P4 (QEMU, 39 verificacoes). O teste e restrito a uma fixture confiavel em CPL0; nao habilita DLLs arbitrarias.
+
 **Estrutura atual do codigo, subsistemas, testes e builds:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). As variantes P1-P4 estao em `experiments/candidates/`, scripts de compilacao em `scripts/build/`, verificacoes em `tests/runners/` e probes em `tests/probes/`.
 
 **Candidata experimental P4 (21/10/2026):** `build/winux-0.38-wrapper-fls-candidate.iso`, SHA-256 `4d1e20074e35fb9b03bbcb3043180cac39c08cd8c5536efc784e48a7e9270c77`. Em QEMU, 37 grupos da regressao passaram: `KernelBase!HeapSetInformation`, alocacao e realocacao originais NTDLL apos politica de heap 2, e wrappers originais KernelBase FLS com callbacks e limpeza do contexto. A suite executa os testes novos duas vezes. O arquivo 0.38 estavel nao foi sobrescrito. P4 ainda nao foi validada no VirtualBox, Proxmox ou hardware e nao executa a CRT Microsoft nem o CMD. [Relatorio P4](HEAP-POLICY-FLS-CANDIDATE-0.38.md).

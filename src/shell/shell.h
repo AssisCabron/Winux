@@ -1,4 +1,7 @@
-#include "../../build/ramfs.h"
+#ifndef WINUX_RAMFS_HEADER
+#define WINUX_RAMFS_HEADER "../../build/ramfs.h"
+#endif
+#include WINUX_RAMFS_HEADER
 #include "../mm/memory_limits.h"
 
 static int same(const char *a, const char *b) {
