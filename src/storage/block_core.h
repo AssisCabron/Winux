@@ -27,6 +27,19 @@ static int wx_block_register(const wx_block_device *device) {
     wx_block_devices[wx_block_count++] = *device;
     return 1;
 }
+/* Explicit driver-owned removal. Do not keep pointers into this packed list
+ * across unregister; callers must acquire a fresh slot after a rebind. */
+static int wx_block_unregister(wx_block_device *device) {
+    if(!device)return 0;
+    for(u32 i=0;i<wx_block_count;i++) {
+        if(&wx_block_devices[i]!=device)continue;
+        for(u32 j=i+1;j<wx_block_count;j++)wx_block_devices[j-1]=wx_block_devices[j];
+        wx_block_count--;
+        wx_block_devices[wx_block_count]=(wx_block_device){0};
+        return 1;
+    }
+    return 0;
+}
 static int wx_block_read(wx_block_device *device,u64 lba,u32 sectors,void *out) {
     if (!device || !device->read || !out || !sectors || sectors > 128U ||
         lba >= device->capacity_sectors ||

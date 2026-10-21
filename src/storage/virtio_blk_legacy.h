@@ -27,6 +27,7 @@ static struct {
     u16 avail_index;
     u16 used_index;
     int initialized;
+    u32 initial_pci_command;
 } wx_virtio_blk;
 
 static u8 wx_vq_memory[WX_VIRTQ_BYTES] __attribute__((aligned(4096)));
@@ -85,7 +86,9 @@ static int wx_virtio_probe(wx_pci_function *function){
     if(!(bar&1U) || (bar&~3U)>0xff00U || (bar&~3U)<0x100U)return 0;
     u16 port=(u16)(bar&~3U);
     u32 control=wx_pci_config(function->bus,function->slot,function->function,4);
-    wx_pci_write(function->bus,function->slot,function->function,4,control|5U);
+    wx_virtio_blk.initial_pci_command=control&65535U;
+    /* PCI status is write-one-to-clear; never echo its bits into a config write. */
+    wx_pci_write(function->bus,function->slot,function->function,4,(control&65535U)|5U);
     outb(port+0x12,0);
     outb(port+0x12,1);
     outb(port+0x12,3);
@@ -120,7 +123,8 @@ static int wx_virtio_probe(wx_pci_function *function){
     outb(port+0x12,7);
     return 1;
 fail:
-    outb(port+0x12,0x83);
+    outb(port+0x12,0); /* reset device, clear queue and bus master */
+    wx_pci_write(function->bus,function->slot,function->function,4,control&65535U);
     wx_virtio_owner=0;
     wx_virtio_blk.initialized=0;
     wx_dma_unregister_device(function);
@@ -130,6 +134,28 @@ static int wx_virtio_blk_detect(void){
     if(wx_virtio_blk.initialized)return 1;
     static const wx_pci_driver driver={"virtio-blk-legacy",0x1af4U,0x1001U,wx_virtio_probe};
     return wx_pci_bind(&driver);
+}
+/* Driver lifecycle is separate from the global PCI enumerator. All DMA
+ * descriptors complete synchronously in this preview before a detach. */
+static int wx_virtio_blk_shutdown(void){
+    if(!wx_virtio_blk.initialized||!wx_virtio_owner)return 0;
+    wx_pci_function *owner=wx_virtio_owner;
+    outb(wx_virtio_blk.port+0x12,0);
+    wx_io_barrier();
+    int removed=0;
+    for(u32 i=0;i<wx_block_count;i++)
+        if(wx_block_devices[i].backend==owner){
+            removed=wx_block_unregister(&wx_block_devices[i]);
+            break;
+        }
+    wx_dma_unregister_device(owner);
+    wx_pci_write(owner->bus,owner->slot,owner->function,4,
+                 wx_virtio_blk.initial_pci_command);
+    wx_pci_release(owner);
+    wx_virtio_owner=0;
+    wx_virtio_blk.initialized=0;
+    wx_virtio_blk.queue_size=0;
+    return removed;
 }
 static int wx_block_device_test(void){
     if(!wx_virtio_blk_detect()){print("BLOCK_TEST_FAILED: no legacy virtio PCI storage\\n");return 0;}
@@ -159,6 +185,18 @@ static int wx_block_device_test(void){
     print("BLOCK_READ_OK: post-UEFI PCI legacy VirtIO, DMA sector0/16 twice, bounds and readonly\\n");
     print("BLOCK_DEVICE: driver=");print(device->driver);
     print(" sectors=");number(device->capacity_sectors);print(" sector_size=512\\n");
+    /* A complete per-device probe/read/remove/reprobe cycle. The PCI
+     * snapshot persists, while driver claim, DMA buffers and block slot
+     * must all return to their original empty state. */
+    if(!wx_virtio_blk_shutdown() || wx_block_count || wx_dma_used ||
+       wx_virtio_owner || wx_block_devices[0].read ||
+       wx_block_read(&wx_block_devices[0],0,1,marker))return 0;
+    if(!wx_virtio_blk_detect() || wx_block_count!=1 || wx_dma_used!=4 ||
+       !wx_block_read(&wx_block_devices[0],16,1,marker))return 0;
+    for(unsigned i=0;i<sizeof(tag)-1;i++)if(marker[i]!=tag[i])return 0;
+    if(!wx_virtio_blk_shutdown() || wx_block_count || wx_dma_used ||
+       wx_virtio_owner || wx_block_devices[0].read)return 0;
+    print("PNP_DEVICE_LIFECYCLE_OK: detach/reprobe, DMA unmap, BAR command restored, no orphan block handles\\n");
     return 1;
 }
 #endif
