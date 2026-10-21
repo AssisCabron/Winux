@@ -1,11 +1,45 @@
 /* Experimental CPL0-to-CPL0 SYSCALL path, one CPU, no nesting or user mode.
  * The CPU does not switch RSP. Save the entry frame and use our own stack.
  * Returning via JMP deliberately stays at CPL0; SYSRET to ring 3 is not built. */
+#include "../../abi/generated/nt_services_19041.h"
 u8 nt_syscall_stack[65536] __attribute__((aligned(16)));
 u64 nt_syscall_frame[8]; /* service, R10, RDX, R8, R9, RSP, RCX, R11 */
 static u8 nt_shared_data[4096] __attribute__((aligned(4096)));
 static int nt_syscall_ready, nt_syscall_allowed, nt_syscall_stack_ok;
 static u32 nt_syscall_counts[8];
+
+/* Bounded diagnostic ledger: only unknown NT service IDs, never call arguments.
+ * The existing kernel is one-CPU/single-context; no SMP locking is claimed. */
+#define NT_MISSING_SLOTS 16
+static struct {u32 id,calls;} nt_missing_services[NT_MISSING_SLOTS];
+static u32 nt_missing_used,nt_missing_overflow;
+static void nt_missing_reset(void){
+    nt_missing_used=nt_missing_overflow=0;
+    for(unsigned i=0;i<NT_MISSING_SLOTS;i++){nt_missing_services[i].id=0;nt_missing_services[i].calls=0;}
+}
+static void nt_missing_note(u32 service){
+    for(unsigned i=0;i<nt_missing_used;i++){
+        if(nt_missing_services[i].id!=service)continue;
+        if(nt_missing_services[i].calls!=0xffffffffU)nt_missing_services[i].calls++;
+        return;
+    }
+    if(nt_missing_used==NT_MISSING_SLOTS){
+        if(nt_missing_overflow!=0xffffffffU)nt_missing_overflow++;
+        return;
+    }
+    nt_missing_services[nt_missing_used].id=service;
+    nt_missing_services[nt_missing_used].calls=1;
+    nt_missing_used++;
+}
+static void nt_missing_report(void){
+    print("NT_MISSING_BEGIN unique=");number(nt_missing_used);
+    print(" overflow=");number(nt_missing_overflow);print("\n");
+    for(unsigned i=0;i<nt_missing_used;i++){
+        print("NT_MISSING_SERVICE ");number(nt_missing_services[i].id);
+        print(" calls=");number(nt_missing_services[i].calls);print("\n");
+    }
+    print("NT_MISSING_END\n");
+}
 
 __attribute__((used,noinline)) static u32 nt_dispatch(u64 *f) {
     u64 sp;
@@ -15,46 +49,45 @@ __attribute__((used,noinline)) static u32 nt_dispatch(u64 *f) {
     if (!nt_syscall_allowed)return 0xc000001cU;
     /* Stack arguments belong to the original caller, not this dispatch stack. */
     u64 *args = (u64 *) f[5];
-    u64 extra = f[0] == 6 || f[0] == 8
-                    ? 80
-                    : (f[0] == 24 || f[0] == 35 ? 56 : (f[0] == 80 || f[0] == 25 || f[0] == 72 || f[0] == 73) ? 48 : 8);
+    u64 extra = wx_nt_stack_span(f[0]);
     if (!stack_range(args, extra))return 0xc0000005U;
     switch ((u32) f[0]) {
-        case 6: return nt_ReadFile((void *) f[1], (void *) f[2], (void *) f[3], (void *) f[4], (void *) args[5],
+        case WX_NT_READ_FILE: return nt_ReadFile((void *) f[1], (void *) f[2], (void *) f[3], (void *) f[4], (void *) args[5],
                                    (void *) args[6], (u32) args[7], (const int64_t *) args[8], (const u32 *) args[9]);
-        case 8: return nt_WriteFile((void *) f[1], (void *) f[2], (void *) f[3], (void *) f[4], (void *) args[5],
+        case WX_NT_WRITE_FILE: return nt_WriteFile((void *) f[1], (void *) f[2], (void *) f[3], (void *) f[4], (void *) args[5],
                                     (void *) args[6], (u32) args[7], (const int64_t *) args[8], (const u32 *) args[9]);
-        case 73: return nt_QueryVolumeInformationFile((void *) f[1], (void *) f[2], (void *) f[3], (u32) f[4],
+        case WX_NT_QUERY_VOLUME_INFORMATION_FILE: return nt_QueryVolumeInformationFile((void *) f[1], (void *) f[2], (void *) f[3], (u32) f[4],
                                                       (u32) args[5]);
-        case 72: nt_syscall_counts[7]++;
+        case WX_NT_CREATE_EVENT: nt_syscall_counts[7]++;
             return nt_CreateEvent((void **) f[1], (u32) f[2], (nt_obj_attributes *) f[3], (u32) f[4], (u8) args[5]);
-        case 14: nt_syscall_counts[7]++;
+        case WX_NT_SET_EVENT: nt_syscall_counts[7]++;
             return nt_SetEvent((void *) f[1], (int32_t *) f[2]);
-        case 4: nt_syscall_counts[7]++;
+        case WX_NT_WAIT_FOR_SINGLE_OBJECT: nt_syscall_counts[7]++;
             return nt_WaitForSingleObject((void *) f[1], (u8) f[2], (const int64_t *) f[3]);
-        case 15: nt_syscall_counts[7]++;
+        case WX_NT_CLOSE: nt_syscall_counts[7]++;
             return nt_Close((void *) f[1]);
-        case 88: nt_syscall_counts[7]++;
+        case WX_NT_OPEN_DIRECTORY_OBJECT: nt_syscall_counts[7]++;
             return nt_OpenDirectoryObject((void **) f[1], (u32) f[2], (nt_obj_attributes *) f[3]);
-        case 302: nt_syscall_counts[7]++;
+        case WX_NT_OPEN_SYMBOLIC_LINK_OBJECT: nt_syscall_counts[7]++;
             return nt_OpenSymbolicLinkObject((void **) f[1], (u32) f[2], (nt_obj_attributes *) f[3]);
-        case 351: nt_syscall_counts[7]++;
+        case WX_NT_QUERY_SYMBOLIC_LINK_OBJECT: nt_syscall_counts[7]++;
             return nt_QuerySymbolicLinkObject((void *) f[1], (nt_obj_string *) f[2], (u32 *) f[3]);
-        case 24: nt_syscall_counts[0]++;
+        case WX_NT_ALLOCATE_VIRTUAL_MEMORY: nt_syscall_counts[0]++;
             return nt_AllocateVirtualMemory((void *) f[1], (void **) f[2], f[3], (u64 *) f[4], (u32) args[5],
                                             (u32) args[6]);
-        case 30: nt_syscall_counts[1]++;
+        case WX_NT_FREE_VIRTUAL_MEMORY: nt_syscall_counts[1]++;
             return nt_FreeVirtualMemory((void *) f[1], (void **) f[2], (u64 *) f[3], (u32) f[4]);
-        case 35: nt_syscall_counts[2]++;
+        case WX_NT_QUERY_VIRTUAL_MEMORY: nt_syscall_counts[2]++;
             return nt_QueryVirtualMemory((void *) f[1], (void *) f[2], (u32) f[3], (void *) f[4], args[5],
                                          (u64 *) args[6]);
-        case 80: nt_syscall_counts[3]++;
+        case WX_NT_PROTECT_VIRTUAL_MEMORY: nt_syscall_counts[3]++;
             return nt_ProtectVirtualMemory((void *) f[1], (void **) f[2], (u64 *) f[3], (u32) f[4], (u32 *) args[5]);
-        case 25: nt_syscall_counts[5]++;
+        case WX_NT_QUERY_INFORMATION_PROCESS: nt_syscall_counts[5]++;
             return nt_QueryInformationProcess((void *) f[1], (u32) f[2], (void *) f[3], (u32) f[4], (u32 *) args[5]);
-        case 54: nt_syscall_counts[6]++;
+        case WX_NT_QUERY_SYSTEM_INFORMATION: nt_syscall_counts[6]++;
             return nt_QuerySystemInformation((u32) f[1], (void *) f[2], (u32) f[3], (u32 *) f[4]);
         default: nt_syscall_counts[4]++;
+            nt_missing_note((u32)f[0]);
             return 0xc000001cU;
     }
 }
@@ -112,10 +145,10 @@ static int nt_stub_test(void) {
     typedef u32 (*free_t)(void *, void **, u64 *, u32);
     typedef u32 (*protect_t)(void *, void **, u64 *, u32, u32 *);
     typedef u32 (*query_t)(void *, void *, u32, void *, u64, u64 *);
-    allocate_t allocate = (allocate_t) nt_checked_stub(m, "NtAllocateVirtualMemory", 24);
-    free_t release = (free_t) nt_checked_stub(m, "NtFreeVirtualMemory", 30);
-    protect_t protect = (protect_t) nt_checked_stub(m, "NtProtectVirtualMemory", 80);
-    query_t query = (query_t) nt_checked_stub(m, "NtQueryVirtualMemory", 35);
+    allocate_t allocate = (allocate_t) nt_checked_stub(m, "NtAllocateVirtualMemory", WX_NT_ALLOCATE_VIRTUAL_MEMORY);
+    free_t release = (free_t) nt_checked_stub(m, "NtFreeVirtualMemory", WX_NT_FREE_VIRTUAL_MEMORY);
+    protect_t protect = (protect_t) nt_checked_stub(m, "NtProtectVirtualMemory", WX_NT_PROTECT_VIRTUAL_MEMORY);
+    query_t query = (query_t) nt_checked_stub(m, "NtQueryVirtualMemory", WX_NT_QUERY_VIRTUAL_MEMORY);
     if (!allocate || !release || !protect || !query || !nt_syscall_init())return 0;
     pg_zero(nt_syscall_counts, sizeof(nt_syscall_counts));
     nt_syscall_stack_ok = 0;

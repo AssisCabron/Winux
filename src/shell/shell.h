@@ -148,7 +148,10 @@ static int pe_test(void) {
 #include "../tests/loader/nt_image_test.h"
 #include "../tests/io/nt_file_test.h"
 #include "../tests/console/nt_console_test.h"
-#include "../tests/runtime/nt_startup_test.h"
+#ifndef WINUX_STARTUP_TEST_HEADER
+#define WINUX_STARTUP_TEST_HEADER "../tests/runtime/nt_startup_test.h"
+#endif
+#include WINUX_STARTUP_TEST_HEADER
 #include "../tests/memory/nt_heap_bootstrap_test.h"
 #include "../tests/objects/nt_object_test.h"
 
@@ -163,7 +166,7 @@ static void command(char *line, unsigned depth) {
     }
     if (same(line, "help"))
         print(
-            "help  cls  ver  mem  uptime  dir\ntype <file>  run <file>  pe <file>  imports <file>\necho <text>  alloc-test  pe-test  fault-test\n");
+            "help  cls  ver  mem  uptime  dir\ntype <file>  run <file>  pe <file>  imports <file>\necho <text>  alloc-test  pe-test  fault-test\nnt-missing  nt-missing-reset\n");
     else if (same(line, "clear") || same(line, "cls"))console_clear();
     else if (same(line, "about") || same(line, "ver"))
         print(
@@ -201,6 +204,8 @@ static void command(char *line, unsigned depth) {
                   ? "VM_REGIONS_OK: reserve, commit, rollback, protect, decommit, release\n"
                   : "VM_REGIONS_FAILED\n");
     else if (same(line, "vm-query-test"))print(vm_query_test() ? "VM_QUERY_OK\n" : "VM_QUERY_FAILED\n");
+    else if (same(line, "nt-missing"))nt_missing_report();
+    else if (same(line, "nt-missing-reset")){nt_missing_reset();print("NT_MISSING_RESET_OK\n");}
     else if (same(line, "nt-stub-test"))print(nt_stub_test() ? "NT_STUB_OK\n" : "NT_STUB_FAILED\n");
     else if (same(line, "nt-partial-test"))print(nt_partial_test() ? "NT_PARTIAL_OK\n" : "NT_PARTIAL_FAILED\n");
     else if (same(line, "nt-info-test"))print(nt_info_test() ? "NT_INFO_OK\n" : "NT_INFO_FAILED\n");

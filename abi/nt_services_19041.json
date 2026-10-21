@@ -1,0 +1,124 @@
+{
+  "schema": "winux.nt-service-profile",
+  "schema_version": 1,
+  "profile": "ntdll-windows-10-19041-x64",
+  "source": "Windows 10 NTDLL as analyzed with REA/Ghidra; never reinterpret as Winux-native ABI",
+  "ntdll_sha256": "36b1a62e4bf6bf7d68458fff6e8a33b39f6527ec6a46e55ecdd12cde83894c8d",
+  "execution_mode": "CPL0_fixture_only",
+  "status": "partial_routes_only",
+  "default_extra_stack_span_bytes": 8,
+  "services": [
+    {
+      "number": 4,
+      "name": "NtWaitForSingleObject",
+      "handler": "nt_WaitForSingleObject",
+      "caller_stack_span_bytes": 8,
+      "domain": "objects"
+    },
+    {
+      "number": 6,
+      "name": "NtReadFile",
+      "handler": "nt_ReadFile",
+      "caller_stack_span_bytes": 80,
+      "domain": "io"
+    },
+    {
+      "number": 8,
+      "name": "NtWriteFile",
+      "handler": "nt_WriteFile",
+      "caller_stack_span_bytes": 80,
+      "domain": "io"
+    },
+    {
+      "number": 14,
+      "name": "NtSetEvent",
+      "handler": "nt_SetEvent",
+      "caller_stack_span_bytes": 8,
+      "domain": "objects"
+    },
+    {
+      "number": 15,
+      "name": "NtClose",
+      "handler": "nt_Close",
+      "caller_stack_span_bytes": 8,
+      "domain": "objects"
+    },
+    {
+      "number": 24,
+      "name": "NtAllocateVirtualMemory",
+      "handler": "nt_AllocateVirtualMemory",
+      "caller_stack_span_bytes": 56,
+      "domain": "memory"
+    },
+    {
+      "number": 25,
+      "name": "NtQueryInformationProcess",
+      "handler": "nt_QueryInformationProcess",
+      "caller_stack_span_bytes": 48,
+      "domain": "process"
+    },
+    {
+      "number": 30,
+      "name": "NtFreeVirtualMemory",
+      "handler": "nt_FreeVirtualMemory",
+      "caller_stack_span_bytes": 8,
+      "domain": "memory"
+    },
+    {
+      "number": 35,
+      "name": "NtQueryVirtualMemory",
+      "handler": "nt_QueryVirtualMemory",
+      "caller_stack_span_bytes": 56,
+      "domain": "memory"
+    },
+    {
+      "number": 54,
+      "name": "NtQuerySystemInformation",
+      "handler": "nt_QuerySystemInformation",
+      "caller_stack_span_bytes": 8,
+      "domain": "system"
+    },
+    {
+      "number": 72,
+      "name": "NtCreateEvent",
+      "handler": "nt_CreateEvent",
+      "caller_stack_span_bytes": 48,
+      "domain": "objects"
+    },
+    {
+      "number": 73,
+      "name": "NtQueryVolumeInformationFile",
+      "handler": "nt_QueryVolumeInformationFile",
+      "caller_stack_span_bytes": 48,
+      "domain": "io"
+    },
+    {
+      "number": 80,
+      "name": "NtProtectVirtualMemory",
+      "handler": "nt_ProtectVirtualMemory",
+      "caller_stack_span_bytes": 48,
+      "domain": "memory"
+    },
+    {
+      "number": 88,
+      "name": "NtOpenDirectoryObject",
+      "handler": "nt_OpenDirectoryObject",
+      "caller_stack_span_bytes": 8,
+      "domain": "objects"
+    },
+    {
+      "number": 302,
+      "name": "NtOpenSymbolicLinkObject",
+      "handler": "nt_OpenSymbolicLinkObject",
+      "caller_stack_span_bytes": 8,
+      "domain": "objects"
+    },
+    {
+      "number": 351,
+      "name": "NtQuerySymbolicLinkObject",
+      "handler": "nt_QuerySymbolicLinkObject",
+      "caller_stack_span_bytes": 8,
+      "domain": "objects"
+    }
+  ]
+}

@@ -1,5 +1,9 @@
 param([string]$Python='python', [string]$Zig="$PSScriptRoot/tools/zig-x86_64-windows-0.14.1/zig.exe", [switch]$IncludeWindowsCmd, [switch]$IncludeWindowsDependencies)
 $ErrorActionPreference='Stop'
+# An existing, version-pinned NT dispatcher consumes the generated service IDs.
+# Fail before writing build outputs if the contract or generated file drifts.
+& $Python "$PSScriptRoot/scripts/build/generate_nt_abi.py" --check
+if($LASTEXITCODE -ne 0){throw 'NT syscall ABI contract drift'}
 New-Item -ItemType Directory -Force "$PSScriptRoot/build" | Out-Null
 $env:ZIG_GLOBAL_CACHE_DIR="$PSScriptRoot/tools/zig-cache"
 & $Zig build-lib -dynamic -target x86_64-windows -O ReleaseSmall -fno-stack-check -fno-stack-protector -fentry=DllMain -fstrip -lkernel32 "-femit-bin=$PSScriptRoot/build/winuxrt.dll" "-femit-implib=$PSScriptRoot/build/winuxrt.lib" -cflags -fno-emulated-tls -Werror=unknown-attributes -- "$PSScriptRoot/apps/winuxrt.c"
