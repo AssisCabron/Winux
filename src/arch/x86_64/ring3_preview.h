@@ -103,6 +103,12 @@ __attribute__((used,noinline)) static void wx_sys_dispatch(u64 *frame) {
         frame[0]=timer_ticks;
         return;
     }
+    if (number==WX_NATIVE_MEMORY_FREE_PAGES) {
+        u32 free_pages=0;
+        for(u32 i=0;i<PAGE_POOL_COUNT;i++)if(!page_used[i])free_pages++;
+        frame[0]=free_pages;
+        return;
+    }
     if (number==WX_NATIVE_EXIT) {
         wx_exit_code=(u32)arg0;
         wx_exit_requested=1;

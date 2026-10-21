@@ -14,11 +14,14 @@ espaços de endereço (wx_address_space), gate INT 80h, quadros salvos
 (wx_user_resume_frame), PIT e execução cooperativa do shell. NÃO cria
 outro escalonador, outro pool de memória ou outro gerenciador de handles.
 
-## Serviço real: clockd
+## Dois serviços reais: clockd e memd
 
-- Código do serviço: src/process/service_manager_preview.h
-- PID de teste: 401, CPL3.
-- Nome: clockd.
+- Código comum: src/process/service_manager_preview.h
+- PID 401: clockd, CPL3; executa a syscall WX_NATIVE_CLOCK_TICKS=3.
+- PID 402: memd, CPL3; executa a syscall WX_NATIVE_MEMORY_FREE_PAGES=4 e
+  observa o total de páginas físicas livres no mesmo pool usado pelo kernel.
+- Ambos possuem CR3, páginas de código e de dados, quadros salvos e ciclo de
+  vida distintos. O escalonador usa round-robin cooperativo no idle.
 - Execução: consulta os ticks PIT reais do kernel pela syscall nativa
   WX_NATIVE_CLOCK_TICKS=3, salva a amostra na página própria de usuário,
   incrementa seu contador e cede por WX_NATIVE_YIELD=2.
@@ -43,14 +46,17 @@ Não é um relógio de tempo civil, sincronização NTP nem serviço de rede.
     svc start clockd
     svc stop clockd
     svc restart clockd
+    svc stop memd
+    svc start memd
+    svc restart memd
 
 A saída de ps usa o estado corrente do processo CPL3 real, incluindo PID,
 CR3 e contador de quanta; ela não mostra a shell CPL0 como se fosse um
 processo CPL3. Ao encerrar o serviço, seu PID deixa de constar em ps.
 Services mostra estado RUNNING/STOPPED/FAILED e geração de instância.
 
-Somente clockd é real nesta fase; não existem linhas fictícias para
-WinLogon, Task Scheduler, WMI, antivírus ou serviços Windows.
+Há exatamente dois serviços reais nesta fase: clockd e memd. Não existem
+linhas fictícias para WinLogon, Task Scheduler, WMI ou antivírus.
 
 ## Teste de integração
 
@@ -66,12 +72,15 @@ O arquivo tests/runners/test_console_wrapper_fls_candidate.py aceita
 6. Segunda parada sem status pendente.
 7. Negativa de START duplicado/STOP repetido, CR3 e páginas livres
    preservados após restart.
-8. Regressões de memória, DLL, console, PCI/DMA, heap e CPL3 anteriores
+8. PID 402 e CR3 diferente do clockd, quanta e total de páginas livres
+   observados no próprio memd, parada, reinício e rejeição de nome desconhecido.
+9. Regressões de memória, DLL, console, PCI/DMA, heap e CPL3 anteriores
    passando no mesmo boot QEMU.
 
-A validação final passou em 44 grupos QEMU, com resultado salvo em
-build/console-foundations-p4-test.json. ISO integrada SHA-256:
-846345c2e07c4189b97641d4f175ee113c3c9fbd443d81ddb3743fef183ca64d.
+A execução com os dois serviços passou em 45 grupos QEMU, e a validação
+conjunta com FAT16 e desmontagem do volume passou em 47 grupos. O resultado final e o hash da ISO
+ficam nos arquivos build/console-foundations-p4-test.json e
+build/foundation-preview/foundation-preview-build.json.
 
 Comando de reprodução:
 
@@ -89,8 +98,9 @@ total livre na saída. Não toca quadros possuídos pelo processo CPL3.
 
 ## Limitações pendentes
 
-Este é um slot único, não um Service Control Manager completo. Falta
-gerenciamento de vários processos, supervisão e reinício automático após
+Existem dois slots explícitos com estados e endereços independentes,
+mas ainda não um Service Control Manager geral. Faltam processos arbitrários,
+supervisão e reinício automático após
 falhas, prioridade, IPC, jobs, segurança e tokens, autenticação,
 sessões, VFS persistente, chamadas bloqueantes, preempção por timer,
 SMP e integração com drivers Windows SYS. O próximo serviço só deve

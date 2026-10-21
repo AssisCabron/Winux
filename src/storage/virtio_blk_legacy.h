@@ -145,6 +145,10 @@ static int wx_virtio_blk_shutdown(void){
     int removed=0;
     for(u32 i=0;i<wx_block_count;i++)
         if(wx_block_devices[i].backend==owner){
+#ifdef WINUX_VFS_PREVIEW
+            /* Invalidate mounted handles BEFORE removing the backing slot. */
+            wx_vfs_unmount_device(&wx_block_devices[i]);
+#endif
             removed=wx_block_unregister(&wx_block_devices[i]);
             break;
         }

@@ -182,7 +182,13 @@ static int pe_test(void) {
 #include "../storage/block_core.h"
 #include "../device/pci_pnp.h"
 #include "../device/dma.h"
+#ifdef WINUX_VFS_PREVIEW
+#include "../fs/vfs.h"
+#endif
 #include "../storage/virtio_blk_legacy.h"
+#ifdef WINUX_VFS_PREVIEW
+#include "../fs/fat16_ro.h"
+#endif
 #endif
 
 static void command(char *line, unsigned depth) {
@@ -194,9 +200,16 @@ static void command(char *line, unsigned depth) {
         *arg++ = 0;
         while (*arg == ' ')arg++;
     }
-    if (same(line, "help"))
+    if (same(line, "help")){
         print(
             "help  cls  ver  mem  uptime  dir\ntype <file>  run <file>  pe <file>  imports <file>\necho <text>  alloc-test  pe-test  fault-test\nnt-missing  nt-missing-reset\n");
+#ifdef WINUX_SERVICE_PREVIEW
+        print("ps  services  svc start|stop|restart clockd|memd\n");
+#endif
+#ifdef WINUX_VFS_PREVIEW
+        print("fs-test  lsdisk  catdisk <8.3 filename> (FAT16 readonly)\n");
+#endif
+    }
     else if (same(line, "clear") || same(line, "cls"))console_clear();
     else if (same(line, "about") || same(line, "ver"))
         print(
@@ -258,14 +271,25 @@ static void command(char *line, unsigned depth) {
 #ifdef WINUX_SERVICE_PREVIEW
     else if(same(line,"ps"))wx_process_list();
     else if(same(line,"services"))wx_service_status();
-    else if(same(line,"svc") && same(arg,"start clockd"))
-        print(wx_service_start()?"SERVICE_START_OK\n":"SERVICE_START_REJECTED\n");
-    else if(same(line,"svc") && same(arg,"stop clockd"))
-        print(wx_service_stop()?"SERVICE_STOP_OK\n":"SERVICE_STOP_FAILED\n");
-    else if(same(line,"svc") && same(arg,"restart clockd")){
-        int was_running=wx_clock_service.state==WX_SERVICE_RUNNING;
-        int stopped=!was_running || wx_service_stop();
-        print(stopped&&wx_service_start()?"SERVICE_RESTART_OK\n":"SERVICE_RESTART_FAILED\n");
+    else if(same(line,"svc"))wx_service_command(arg);
+#endif
+#ifdef WINUX_VFS_PREVIEW
+    else if(same(line,"fs-test"))print(wx_vfs_fat_test()?"VFS_TEST_OK\n":"VFS_TEST_FAILED\n");
+    else if(same(line,"lsdisk")){
+        if(!wx_root_volume.list || !wx_root_volume.list(&wx_root_volume))
+            print("VFS_LIST_FAILED\n");
+    }
+    else if(same(line,"catdisk")){
+        u32 bytes=0;
+        if(!wx_vfs_read_file(arg,wx_vfs_scratch,sizeof(wx_vfs_scratch),&bytes))
+            print("VFS_NOT_FOUND\n");
+        else{
+            for(u32 i=0;i<bytes;i++){
+                unsigned char c=wx_vfs_scratch[i];
+                console_char((c>=32 && c<127)||c=='\n'||c=='\r'?(char)c:'.');
+            }
+            print("\nVFS_READ_OK\n");
+        }
     }
 #endif
     else if (same(line, "nt-missing"))nt_missing_report();
@@ -381,7 +405,7 @@ static void shell(void) {
     int previous_cr = 0;
 #ifdef WINUX_SERVICE_PREVIEW
     /* Auto-start one REAL CPL3 clock sampling service for this preview only. */
-    if(!wx_service_start())serial("SERVICE_BOOT_FAILED\r\n");
+    if(!wx_service_boot())serial("SERVICE_BOOT_FAILED\r\n");
 #endif
     print("\nType help to begin.\nwinux> ");
     serial("KERNEL: CONSOLE_READY\r\n");

@@ -25,6 +25,7 @@ parser.add_argument('--check-proc-space',action='store_true',help='Execute two C
 parser.add_argument('--check-scheduler',action='store_true',help='Verify real Win64 stack/CR3 context switching and cooperative yields')
 parser.add_argument('--check-user-scheduler',action='store_true',help='Require two CPL3 process continuations to resume after native yield')
 parser.add_argument('--check-services',action='store_true',help='Verify resident CPL3 clockd autostart, scheduling, listing, stop and restart')
+parser.add_argument('--check-vfs',action='store_true',help='Verify FAT16 read-only mount, root listing and file contents')
 args=parser.parse_args()
 assert re.fullmatch(r'[a-zA-Z0-9-]{1,70}',args.result_tag), 'Invalid result tag'
 tag='page-fault' if args.page_fault else ('nx-fault' if args.nx_fault else ('fault' if args.fault else args.result_tag))
@@ -47,7 +48,8 @@ command=[str(qemu),'-machine','q35','-accel','tcg','-m','256M','-smp','1',
 if args.block_image:
     block_image=(root/args.block_image if not args.block_image.is_absolute() else args.block_image).resolve()
     assert block_image.is_file() and (root/'build') in block_image.parents and block_image.suffix.lower()=='.img'
-    assert block_image.name=='driver-test-disk.img' and block_image.stat().st_size==4096*512
+    permitted={'driver-test-disk.img':4096,'fat16-test-disk.img':32768}
+    assert block_image.name in permitted and block_image.stat().st_size==permitted[block_image.name]*512
     command += ['-drive',f'if=none,id=winux-block-test,file={block_image},format=raw,readonly=on',
                 '-device','virtio-blk-pci,drive=winux-block-test,disable-modern=on']
 output='';checks=[];start=time.monotonic();failure=None
@@ -91,8 +93,29 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
                 assert 'PNP_DMA_GUARD_OK: PCI exact match' in block_text
                 assert 'BLOCK_READ_OK: post-UEFI PCI legacy VirtIO' in block_text
                 assert 'PNP_DEVICE_LIFECYCLE_OK: detach/reprobe' in block_text
-                assert 'driver=virtio-blk-legacy sectors=4096 sector_size=512' in block_text
+                expected_sectors=32768 if args.check_vfs else 4096
+                assert f'driver=virtio-blk-legacy sectors={expected_sectors} sector_size=512' in block_text
             checks.append('two post-UEFI PCI VirtIO read-only cycles with driver detachment, DMA cleanup and rebinding')
+        if args.check_vfs:
+            assert args.block_image and block_image.name=='fat16-test-disk.img'
+            mounted=send('fs-test','VFS_TEST_OK')
+            assert 'VFS_FAT16_OK: readonly mount, 2 root files' in mounted
+            listing=send('lsdisk','VFS_LIST_END')
+            assert 'VFS_FILE HELLO.TXT bytes=900' in listing
+            assert 'VFS_FILE STATUS.TXT bytes=28' in listing
+            text=send('catdisk status.txt','VFS_READ_OK')
+            assert 'WINUX_FAT16_RUNTIME_READ_OK' in text
+            assert 'VFS_NOT_FOUND' in send('catdisk ../HELLO.TXT','VFS_NOT_FOUND')
+            assert 'VFS_NOT_FOUND' in send('catdisk MISSING.TXT','VFS_NOT_FOUND')
+            checks.append('FAT16 readonly mount using real PCI block driver, 900-byte scattered file chain, root enumeration, path rejection')
+            # Removing the PCI function must invalidate the live VFS mount.
+            again=send('block-test','BLOCK_TEST_OK')
+            assert 'PNP_DEVICE_LIFECYCLE_OK' in again
+            assert 'VFS_NOT_FOUND' in send('catdisk STATUS.TXT','VFS_NOT_FOUND')
+            remount=send('fs-test','VFS_TEST_OK')
+            assert 'VFS_FAT16_OK:' in remount
+            assert 'WINUX_FAT16_RUNTIME_READ_OK' in send('catdisk STATUS.TXT','VFS_READ_OK')
+            checks.append('block device detach invalidates VFS mount and remount restores FAT16 file access')
         if args.check_scheduler:
             for cycle in range(2):
                 sched_text=send('sched-test','SCHED_TEST_OK')
@@ -155,6 +178,26 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
             assert 'state=STOPPED' in send('services','SERVICE_LIST_END')
             checks.append('CPL3 service stop/restart/reap reuses process memory and removes exited PID from ps')
             checks.append('service lifecycle rejects invalid transitions and retains CR3/page-pool counts across restart')
+            # memd must be a second REAL CPL3 resident process. Its service
+            # syscall reads the existing physical page allocator, not a
+            # fabricated value or a duplicate memory manager.
+            mem_report=send('services','SERVICE_LIST_END')
+            mem_match=re.search(r'SERVICE memd pid=402 state=RUNNING generation=(\d+) quanta=(\d+) last_free_pages=(\d+)',mem_report)
+            assert mem_match and int(mem_match.group(2))>0,mem_report
+            memory=send('mem','free pages, 4 KiB each')
+            available=re.search(r'Reserved kernel pool: (\d+) / (\d+) free pages',memory)
+            assert available and int(mem_match.group(3))==int(available.group(1)),(mem_report,memory)
+            mem_ps=send('ps','PROCESS_LIST_END')
+            mem_cr3=re.search(r'PROCESS pid=402 name=memd cpl=3 state=RUNNING cr3=(0x[0-9a-f]{16})',mem_ps)
+            assert mem_cr3 and mem_cr3.group(1)!=initial_cr3.group(1)
+            assert 'SERVICE_UNKNOWN' in send('svc start not-installed','SERVICE_UNKNOWN')
+            send('svc stop memd','SERVICE_STOP_OK')
+            assert 'PROCESS pid=402' not in send('ps','PROCESS_LIST_END')
+            send('svc restart memd','SERVICE_RESTART_OK')
+            restarted_mem=send('ps','PROCESS_LIST_END')
+            assert 'cr3='+mem_cr3.group(1) in restarted_mem
+            send('svc stop memd','SERVICE_STOP_OK')
+            checks.append('two distinct CPL3 services: independent PIDs/CR3, live memory syscall, stop/restart and unknown-service rejection')
         assert 'AFTER_EXIT_BOOT_SERVICES' in output and '[OK] Reserved page allocator' in output
         checks.append('post-firmware console and allocator self-test')
         assert 'KERNEL: OWN_CR3_ACTIVE WP NX' in output
