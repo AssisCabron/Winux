@@ -214,6 +214,15 @@ static void command(char *line, unsigned depth) {
 #ifdef WINUX_RING3_PREVIEW
     else if (same(line, "ring3-test"))print(wx_ring3_test() ? "RING3_SMOKE_OK\n" : "RING3_SMOKE_FAILED\n");
 #endif
+#ifdef WINUX_STORAGE_PREVIEW
+    else if (same(line, "storage-status")){
+        print("WINUX_STORAGE_STATUS: found=");number(wx_storage_volume_found);
+        print(" installed=");number(wx_storage_installed);
+        print(" existing=");number(wx_storage_existing);
+        print(" failed=");number(wx_storage_failed);
+        print(" accounts=SETUP_REQUIRED\n");
+    }
+#endif
     else if (same(line, "nt-missing"))nt_missing_report();
     else if (same(line, "nt-missing-reset")){nt_missing_reset();print("NT_MISSING_RESET_OK\n");}
     else if (same(line, "nt-stub-test"))print(nt_stub_test() ? "NT_STUB_OK\n" : "NT_STUB_FAILED\n");

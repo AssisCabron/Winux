@@ -1,6 +1,7 @@
 /* One-shot Ring 3 proof: supervisor isolation and bounded int 0x80 gate.
  * Compiled only in the isolated WINUX_RING3_PREVIEW build, never stable 0.38.
  * Not a process scheduler, Linux ABI, or general NT syscall replacement. */
+#include "../../../abi/native_services_v1.h"
 #define WX_USER_CODE (PG_WINDOW + 0x0f000000ULL)
 #define WX_USER_STACK (PG_WINDOW + 0x0f001000ULL)
 #define WX_USER_PAGE 4ULL
@@ -49,7 +50,7 @@ __attribute__((naked)) static void wx_user_pf(void) {
       "1: movq $14,%rcx; movq (%rsp),%rdx; subq $40,%rsp; call kernel_fault; ud2");
 }
 static int wx_user_readable(u64 addr,u64 size) {
-    if (!size || size>256 || addr<WX_USER_CODE || addr>WX_USER_CODE+4096-size)return 0;
+    if (!size || size>WX_NATIVE_MAX_WRITE || addr<WX_USER_CODE || addr>WX_USER_CODE+4096-size)return 0;
     for (u64 va=addr&~4095ULL;va<addr+size;va+=4096) {
         u64 *leaf=pg_leaf(va,0);
         if (!leaf || !(*leaf & (PG_PRESENT|4ULL)) || ((*leaf&5ULL)!=5ULL))return 0;
@@ -59,13 +60,13 @@ static int wx_user_readable(u64 addr,u64 size) {
 /* Frame saved in order rax, rcx, rdx, rbx, rbp, rsi, rdi, r8 ... r15. */
 __attribute__((used,noinline)) static void wx_sys_dispatch(u64 *frame) {
     u64 number=frame[0],arg0=frame[6],arg1=frame[5],arg2=frame[2];
-    if (number==0) {
+    if (number==WX_NATIVE_EXIT) {
         wx_exit_code=(u32)arg0;
         wx_exit_requested=1;
         frame[0]=0;
         return;
     }
-    if (number==1 && arg0==1 && wx_user_readable(arg1,arg2)) {
+    if (number==WX_NATIVE_CONSOLE_WRITE && arg0==WX_NATIVE_STDOUT_HANDLE && wx_user_readable(arg1,arg2)) {
         for (u64 i=0;i<arg2;i++)console_char(((const char *)arg1)[i]);
         wx_write_count+=(u32)arg2;
         frame[0]=arg2;
@@ -129,12 +130,12 @@ static int wx_ring3_test(void) {
     const char message[]="RING3_USER_WRITE_OK\n";
     u8 *p=(u8*)WX_USER_CODE;
     unsigned n=0;
-    p[n++]=0xb8;*(u32*)(p+n)=1;n+=4;        /* mov eax, SYS_WRITE */
-    p[n++]=0xbf;*(u32*)(p+n)=1;n+=4;        /* stdout handle */
+    p[n++]=0xb8;*(u32*)(p+n)=WX_NATIVE_CONSOLE_WRITE;n+=4;
+    p[n++]=0xbf;*(u32*)(p+n)=WX_NATIVE_STDOUT_HANDLE;n+=4;
     p[n++]=0x48;p[n++]=0xbe;*(u64*)(p+n)=WX_USER_CODE+0x100;n+=8;
     p[n++]=0xba;*(u32*)(p+n)=sizeof(message)-1;n+=4;
     p[n++]=0xcd;p[n++]=0x80;               /* int 80h */
-    p[n++]=0xb8;*(u32*)(p+n)=0;n+=4;       /* SYS_EXIT */
+    p[n++]=0xb8;*(u32*)(p+n)=WX_NATIVE_EXIT;n+=4;
     p[n++]=0xbf;*(u32*)(p+n)=42;n+=4;
     p[n++]=0xcd;p[n++]=0x80;
     p[n++]=0x0f;p[n++]=0x0b;              /* unexpected path: UD2 */

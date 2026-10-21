@@ -47,6 +47,9 @@ static void serial(const char *s) {
 }
 static void hex(u64 n) { char b[19]="0x0000000000000000"; for(int i=17;i>=2;i--){ b[i]="0123456789abcdef"[n&15]; n>>=4;} serial(b); serial("\r\n"); }
 static int equal_guid(guid *a,guid *b) { u8 *x=(u8*)a,*y=(u8*)b; for(int i=0;i<16;i++) if(x[i]!=y[i]) return 0; return 1; }
+#ifdef WINUX_STORAGE_PREVIEW
+#include "../../../src/storage/uefi_install_preview.h"
+#endif
 #include "../../../src/console/console.h"
 #include "../../../src/arch/x86_64/hardware.h"
 #include "../../../src/arch/x86_64/paging.h"
@@ -80,6 +83,9 @@ status EfiMain(void *image, system_table *st) {
  typedef status (*exit_t)(void*,u64);
  typedef status (*watchdog_t)(u64,u64,u64,u16*);
  ((watchdog_t)bs->fn[29])(0,0,0,0);
+#ifdef WINUX_STORAGE_PREVIEW
+ wx_storage_install_uefi(bs);
+#endif
  guid gg={0x9042a9de,0x23dc,0x4a38,{0x96,0xfb,0x7a,0xde,0xd0,0x80,0x51,0x6a}};
  guid ig={0x5b1b31a1,0x9562,0x11d2,{0x8e,0x3f,0,0xa0,0xc9,0x69,0x72,0x3b}};
  guid acpi={0x8868e871,0xe4f1,0x11d3,{0xbc,0x22,0,0x80,0xc7,0x3c,0x88,0x81}};
