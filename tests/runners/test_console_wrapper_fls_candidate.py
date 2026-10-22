@@ -35,6 +35,7 @@ parser.add_argument('--check-ipc-wait',action='store_true',help='Real CPL3 IPC r
 parser.add_argument('--check-isolation-dma',action='store_true',help='CPL3 cross-process/DMA-pool #PF, DMA coherent pool and revoked device mappings')
 parser.add_argument('--check-vtd',action='store_true',help='Enable Intel VT-d Q35 emulation and validate hardware second-level translation')
 parser.add_argument('--check-process-manager',action='store_true',help='Verify repeated process spawn, exit, resource reaping and free-page invariants')
+parser.add_argument('--check-user-pe',action='store_true',help='Execute external PE32+ from FAT16 through Process Manager in CPL3')
 args=parser.parse_args()
 assert re.fullmatch(r'[a-zA-Z0-9-]{1,70}',args.result_tag), 'Invalid result tag'
 tag='page-fault' if args.page_fault else ('nx-fault' if args.nx_fault else ('fault' if args.fault else args.result_tag))
@@ -59,7 +60,7 @@ if args.check_vtd:
 if args.block_image:
     block_image=(root/args.block_image if not args.block_image.is_absolute() else args.block_image).resolve()
     assert block_image.is_file() and (root/'build') in block_image.parents and block_image.suffix.lower()=='.img'
-    permitted={'driver-test-disk.img':4096,'fat16-test-disk.img':32768,'fat16-tree-disk.img':32768}
+    permitted={'driver-test-disk.img':4096,'fat16-test-disk.img':32768,'fat16-tree-disk.img':32768,'user-pe-fat16-v2.img':32768}
     assert block_image.name in permitted and block_image.stat().st_size==permitted[block_image.name]*512
     command += ['-drive',f'if=none,id=winux-block-test,file={block_image},format=raw,readonly=on',
                 '-device','virtio-blk-pci,drive=winux-block-test,disable-modern=on']
@@ -118,7 +119,7 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
                 checks.append('VT-d domain BDF, hardware second-level translation, live VirtIO block DMA read')
                 assert 'BLOCK_READ_OK: post-UEFI PCI legacy VirtIO' in block_text
                 assert 'PNP_DEVICE_LIFECYCLE_OK: detach/reprobe' in block_text
-                expected_sectors=32768 if block_image.name.startswith('fat16') else 4096
+                expected_sectors=32768 if block_image.name.startswith('fat16') or block_image.name=='user-pe-fat16-v2.img' else 4096
                 assert f'driver=virtio-blk-legacy sectors={expected_sectors} sector_size=512' in block_text
             checks.append('two post-UEFI PCI VirtIO read-only cycles with driver detachment, DMA cleanup and rebinding')
             if args.check_isolation_dma:
@@ -129,7 +130,7 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
                 assert re.search(r'generation=[1-9][0-9]* rejected=[1-9][0-9]*',status),status
                 checks.append('DMA status shows zero orphan allocations after two device cycles and explicitly reports no IOMMU')
         if args.check_vfs:
-            assert args.block_image and block_image.name in ('fat16-test-disk.img','fat16-tree-disk.img')
+            assert args.block_image and block_image.name in ('fat16-test-disk.img','fat16-tree-disk.img','user-pe-fat16-v2.img')
             mounted=send('fs-test','VFS_TEST_OK')
             assert 'VFS_FAT16_OK: readonly mount, 2 root files' in mounted
             listing=send('lsdisk','VFS_LIST_END')
@@ -149,7 +150,7 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
             assert 'WINUX_FAT16_RUNTIME_READ_OK' in send('catdisk STATUS.TXT','VFS_READ_OK')
             checks.append('block device detach invalidates VFS mount and remount restores FAT16 file access')
             if args.check_fat16_tree:
-                assert block_image.name=='fat16-tree-disk.img'
+                assert block_image.name in ('fat16-tree-disk.img','user-pe-fat16-v2.img')
                 result=send('fs-tree-test','VFS_TREE_TEST_OK')
                 assert 'VFS_TREE_OK: readonly subdirectory, 6144-byte noncontiguous FAT chain' in result
                 rootdir=send('lsdisk','VFS_LIST_END')
@@ -197,6 +198,25 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
             wait_contract=send('wait-test','WAIT_TEST_OK')
             assert 'THREAD_WAIT_OK: invalid durations rejected, BLOCKED excluded until PIT deadline' in wait_contract
             checks.append('native sleep contract rejects invalid durations and PIT deadline wakes a managed transient thread without memory leaks')
+        if args.check_user_pe:
+            assert args.block_image and block_image.name=='user-pe-fat16-v2.img'
+            fixture=json.loads((build/'user-pe-preview'/'user-pe-fixture-v2.json').read_text(encoding='utf8'))
+            assert fixture['disk_sha256']==hashlib.sha256(block_image.read_bytes()).hexdigest()
+            for cycle in range(3):
+                observed=send('exec APPS/USER64.EXE','USER_PE_LIFECYCLE_OK')
+                assert 'USER_PE_EXEC_OK: external PE32+ on CPL3 via FAT16' in observed,observed
+                assert 'PROCESS_CREATED pid=' in observed and 'PROCESS_EXIT code=0 fault=0' in observed,observed
+                assert 'PROCESS_REAP_OK: frames and handles restored' in observed,observed
+            checks.append('3 external PE32+ loads from FAT16, real CPL3 syscall/exit and complete process reaping')
+            malformed=send('exec APPS/BAD64.EXE','USER_PE_REJECTED: malformed or unsupported PE32+')
+            assert 'PROCESS_CREATED' not in malformed,malformed
+            unknown=send('exec APPS/UNKNOWN.EXE','USER_PE_REJECTED: unknown/untrusted path')
+            assert 'PROCESS_CREATED' not in unknown,unknown
+            for p in ('WRITE64.EXE','NX64.EXE'):
+                faulted=send('exec APPS/'+p,'USER_PE_SECURITY_OK')
+                assert 'USER_PE_FAULT_CONTAINED_OK' in faulted and 'PROCESS_REAP_OK' in faulted,faulted
+                assert 'PROCESS_EXIT code=98 fault=14' in faulted,faulted
+            checks.append('invalid PE/unknown path rejected and CPL3 RX write/NX execute faults isolated with resource reaping')
         if args.check_isolation_dma:
             for cycle in range(2):
                 isolated=send('isolation-test','ISOLATION_TEST_OK')

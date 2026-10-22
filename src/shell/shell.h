@@ -203,6 +203,9 @@ static int pe_test(void) {
 #ifdef WINUX_VFS_PREVIEW
 #include "../fs/fat16_ro.h"
 #endif
+#ifdef WINUX_USER_PE_PREVIEW
+#include "../process/user_pe_loader.h"
+#endif
 #endif
 #if defined(WINUX_BLOCK_PREVIEW) && defined(WINUX_TIMER_PREEMPT_PREVIEW)
 #include "../tests/process/isolation_dma_test.h"
@@ -225,6 +228,9 @@ static void command(char *line, unsigned depth) {
 #endif
 #ifdef WINUX_VFS_PREVIEW
         print("fs-test  lsdisk  catdisk <8.3 filename> (FAT16 readonly)\n");
+#ifdef WINUX_USER_PE_PREVIEW
+        print("exec APPS/USER64.EXE  (isolated PE32+ CPL3 fixture)\n");
+#endif
 #endif
     }
     else if (same(line, "clear") || same(line, "cls"))console_clear();
@@ -306,6 +312,9 @@ static void command(char *line, unsigned depth) {
         if(!wx_root_volume.list || !wx_root_volume.list(&wx_root_volume,arg))
             print("VFS_LIST_FAILED\n");
     }
+#ifdef WINUX_USER_PE_PREVIEW
+    else if(same(line,"exec")){wx_user_pe_exec(arg);}
+#endif
     else if(same(line,"catdisk")){
         u32 bytes=0;
         if(!wx_vfs_read_file(arg,wx_vfs_scratch,sizeof(wx_vfs_scratch),&bytes))

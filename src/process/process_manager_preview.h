@@ -236,6 +236,42 @@ static int wx_proc_run(wx_managed_process *p){
     p->state=success?WX_PROC_EXITED:WX_PROC_FAILED;
     return success;
 }
+/* Execute an externally loaded CPL3 image using the SAME Process Manager
+ * ownership, CR3, TSS, kernel stack, FPU state and reaping model. No CPL0 PE
+ * execution. The caller must validate/map the entry point before this call.
+ * Only the transient process slot is eligible. */
+#ifdef WINUX_USER_PE_PREVIEW
+static u8 wx_pe_kernel_fx[512] __attribute__((aligned(16)));
+static int wx_proc_run_entry(wx_managed_process *p,u64 entry,u32 wanted,
+                             u32 *actual,u64 *fault,u64 *fault_error){
+    if(!p||p->resident||p->state!=WX_PROC_READY||wx_active||
+       wx_user_resume_target||wx_proc_current_irq||
+       entry!=WX_USER_CODE||!p->space.root)return 0;
+    const u64 original_cr3=wx_read_cr3(),rsp0=wx_tss.rsp0;
+    p->state=WX_PROC_RUNNING;
+    wx_tss.rsp0=((u64)p->thread.kernel_stack+
+                 sizeof(p->thread.kernel_stack)-16)&~15ULL;
+    wx_proc_current_irq=p;
+    wx_proc_current_thread=&p->thread;
+    wx_active=1;wx_exit_requested=0;wx_exit_code=0;
+    wx_fault_vector=0;wx_fault_error=0;
+    __asm__ volatile("fxsave64 %0":"=m"(wx_pe_kernel_fx)::"memory");
+    wx_load_cr3((u64)p->space.root);
+    u32 result=wx_enter_user(entry,WX_USER_STACK+4096-16);
+    wx_load_cr3(original_cr3);
+    __asm__ volatile("fxrstor64 %0"::"m"(wx_pe_kernel_fx):"memory");
+    wx_tss.rsp0=rsp0;
+    wx_active=0;
+    wx_proc_current_irq=0;wx_proc_current_thread=0;
+    if(actual)*actual=result;
+    if(fault)*fault=wx_fault_vector;
+    if(fault_error)*fault_error=wx_fault_error;
+    int ok=wx_exit_requested && !wx_fault_vector && result==wanted;
+    p->exit_code=result;
+    p->state=ok?WX_PROC_EXITED:WX_PROC_FAILED;
+    return ok;
+}
+#endif
 static int wx_proc_reap(wx_managed_process *p){
     if(!p || p->resident || (p->state!=WX_PROC_EXITED && p->state!=WX_PROC_FAILED) ||
        wx_active)return 0;

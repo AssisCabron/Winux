@@ -11,6 +11,8 @@ typedef struct {
     u64 *pt;
     void *code;
     void *stack;
+    void *image_header; /* Optional PE headers page, CPL3 read-only/NX. */
+    u64 *image_header_pt; /* Distinct PT across preceding 2MiB PDE boundary. */
     u32 pid;
     u32 exit_code;
 } wx_address_space;
@@ -75,6 +77,8 @@ static int wx_space_destroy(wx_address_space *p){
     int ok=1;
     if(p->code && !page_free(p->code))ok=0;
     if(p->stack && !page_free(p->stack))ok=0;
+    if(p->image_header && !page_free(p->image_header))ok=0;
+    if(p->image_header_pt && !page_free(p->image_header_pt))ok=0;
     if(p->pt && !page_free(p->pt))ok=0;
     if(p->pd && !page_free(p->pd))ok=0;
     if(p->pdpt && !page_free(p->pdpt))ok=0;

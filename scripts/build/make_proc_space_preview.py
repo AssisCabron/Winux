@@ -4,12 +4,16 @@ import hashlib,subprocess,json,io,contextlib,argparse
 cli=argparse.ArgumentParser()
 cli.add_argument("--experiment",choices=("proc_space","scheduler","integration","preemption"),default="proc_space")
 cli.add_argument("--vtd",action="store_true",help="Create separate Intel VT-d-required QEMU preview")
+cli.add_argument("--user-pe",action="store_true",help="Build USER-PE64 isolated CPL3 loader preview")
 args=cli.parse_args()
 EXPERIMENT=args.experiment
 VTD=args.vtd
-if VTD and EXPERIMENT!="integration":cli.error("--vtd requires --experiment integration")
+USER_PE=args.user_pe
+if VTD and USER_PE:cli.error("Use separate hardware and process previews")
+if (VTD or USER_PE) and EXPERIMENT!="integration":cli.error("Experimental preview requires integration")
 OUT_NAME={"proc_space":"proc-space-preview","scheduler":"scheduler-preview","integration":"foundation-preview","preemption":"preemption-preview"}[EXPERIMENT]
 if VTD:OUT_NAME="vtd-preview"
+if USER_PE:OUT_NAME="user-pe-preview"
 ROOT=Path(__file__).resolve().parents[2]
 OUT=ROOT/"build"/OUT_NAME
 OUT.mkdir(exist_ok=True,parents=True)
@@ -34,7 +38,8 @@ if EXPERIMENT in ("scheduler","integration","preemption"):
     sources.append(str(obj))
 subprocess.run([str(zig),"build-exe","-target","x86_64-uefi","-O","ReleaseSmall",
  "-fno-stack-check","-fno-stack-protector","-mno-red-zone",f"-femit-bin={efi}",
- "-fstrip",*(["-DWINUX_INTEL_VTD_PREVIEW"] if VTD else []),*sources],check=True)
+ "-fstrip",*(["-DWINUX_INTEL_VTD_PREVIEW"] if VTD else []),
+ *(["-DWINUX_USER_PE_PREVIEW"] if USER_PE else []),*sources],check=True)
 pack=ROOT/"experiments"/"packaging"/"make_iso_wrapper_fls_candidate.py"
 text=pack.read_text(encoding="utf8")
 assert text.count("build=ROOT/'build'")==1
