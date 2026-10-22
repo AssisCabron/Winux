@@ -140,6 +140,7 @@ static void or_glass(u32 x,u32 y,u32 w,u32 h,u32 tint,u32 alpha){
         }
     }
 }
+#include "orbis_design.h"
 static void or_app_icon(u32 x,u32 y,u32 k){
     static const u32 colors[6]={0x277fda,0x111c2a,0x7154d4,0x495462,0x159c90,0x596a91};
     or_glass(x,y,73,61,colors[k],234);
@@ -191,40 +192,60 @@ static void or_panel(u32 y,const char *heading){
     or_center(y+27,heading,OR_WHITE);
 }
 static void or_splash_screen(void){
-    or_logo(249);
-    or_disc(641,397,32,0x596776);or_disc(641,397,25,OR_DARK);
-    or_disc(656,381,8,0x4eb5fa);
-    or_center(451,"Starting ORBIS OS...",OR_WHITE);
-    or_center(612,"Native UEFI x86-64 graphical preview",OR_GRAY);
+    or_glass(369,236,545,252,ORBIS_GLASS,96);
+    or_brand_ring(558,332,36);
+    or_text_display_at(or_x(613),or_y(307),"ORBIS OS",OR_WHITE);
+    or_body_center(387,"Starting ORBIS OS",OR_WHITE);
+    or_disc(632,450,18,0x344458);
+    or_disc(632,450,14,0x172439);
+    or_disc(638,439,5,ORBIS_ACCENT);
+    or_body_center(607,"A more open tomorrow.",ORBIS_LIGHT);
 }
 static void or_setup_screen(void){
-    or_panel(151,"WELCOME TO ORBIS OS");
-    or_label(402,231,"First boot - local preview setup",OR_WHITE);
-    or_label(402,265,"Region: Brazil    Language: English",OR_GRAY);
-    or_label(402,299,"Keyboard: US     Timezone: not configured",OR_GRAY);
-    or_rect(402,340,470,1,OR_EDGE);
-    or_label(405,361,or_state==OR_SETUP_NAME?
+    /* Modern first-boot card with typographic hierarchy and warm brand. */
+    or_brand_ring(91,162,30);
+    or_text_display_at(or_x(134),or_y(134),"ORBIS OS",OR_WHITE);
+    or_label(54,207,"A BRIGHTER TOMORROW",ORBIS_LIGHT);
+    or_rect(54,328,46,3,ORBIS_ACCENT);
+    or_label(54,350,"Modern. Focused. Human.",OR_WHITE);
+    or_label(54,390,"Clarity, productivity and a",OR_GRAY);
+    or_label(54,420,"more beautiful digital life.",OR_GRAY);
+    or_glass(349,131,583,486,0x071324,88);
+    or_glass(355,123,570,483,ORBIS_GLASS,197);
+    or_frame(355,123,570,483,0x8b8795);
+    or_brand_ring(640,167,23);
+    or_heading_center(208,"Welcome to ORBIS OS",OR_WHITE);
+    or_body_center(261,"A more open tomorrow.",ORBIS_LIGHT);
+    or_label(399,295,"First boot  -  local preview setup",OR_WHITE);
+    or_label(399,324,"Region: Brazil      Language: English",OR_GRAY);
+    or_label(399,351,"Keyboard: US       Timezone: not configured",OR_GRAY);
+    or_rect(397,382,480,1,0x7a7582);
+    or_label(401,391,or_state==OR_SETUP_NAME?
        "Step 1: Display name":"Step 2: Demo PIN (4-16 chars)",OR_WHITE);
-    or_glass(405,394,462,54,0x27303a,220);or_frame(405,394,462,54,0x77899e);
-    if(or_state==OR_SETUP_NAME)or_label(419,412,or_name,OR_WHITE);
-    else or_mask(428,425);
-    or_button(405,470,462,"CONTINUE");
-    or_label(406,543,"Volatile account. Not a secure login yet.",0xf2d99f);
+    or_field(405,420,462,44,or_state==OR_SETUP_NAME&&!or_name_len?
+             "Enter your display name...":0,1);
+    if(or_state==OR_SETUP_NAME)or_label(426,430,or_name,OR_WHITE);
+    else or_mask(435,444);
+    or_primary(405,475,462,"Continue >");
+    or_info_bar(405,546,"Volatile account. Not a secure login yet.");
 }
 static void or_login_screen(void){
-    or_logo(99);
-    or_panel(173,"SIGN IN TO ORBIS OS");
-    or_disc(639,285,55,0x60798d);
-    or_disc(639,283,35,0x2a465c);
-    or_label(548,355,or_name,OR_WHITE);
-    or_glass(415,399,450,52,0x27303a,220);or_frame(415,399,450,52,0x84909c);
-    or_label(430,414,"PIN",OR_GRAY);
-    or_mask(510,424);
-    or_button(415,474,450,"SIGN IN");
-    or_label(423,544,"G = Guest       Enter = Sign in",OR_GRAY);
-    if(or_attempts)or_label(425,563,"Incorrect PIN",0xf9aaaa);
-    if(timer_ticks<or_lock_until)or_label(425,581,"Locked for 30 seconds",0xf9aaaa);
-    or_label(35,679,"ESCAPE: not implemented",OR_GRAY);
+    or_glass(349,154,583,444,0x081522,90);
+    or_glass(355,145,570,442,ORBIS_GLASS,202);
+    or_frame(355,145,570,442,0x8b8795);
+    or_brand_ring(640,188,26);
+    or_heading_center(232,"Sign in to ORBIS OS",OR_WHITE);
+    or_disc(640,325,37,0x8394b5);
+    or_disc(640,313,14,0xe7edf8);
+    or_disc(640,344,21,0xd9e5f5);
+    or_body_center(367,or_name[0]?or_name:"Local user",OR_WHITE);
+    or_field(415,405,450,49,or_pin_len?0:"Enter your demo PIN...",1);
+    if(or_pin_len)or_mask(520,429);
+    or_primary(415,475,450,"Sign In >");
+    or_label(438,545,"G: Guest session",ORBIS_LIGHT);
+    or_label(675,545,"Enter: Sign in",OR_GRAY);
+    if(or_attempts)or_label(436,566,"Incorrect PIN",0xffb7a7);
+    if(timer_ticks<or_lock_until)or_label(600,566,"Temporarily locked",0xffb7a7);
 }
 static void or_small_dock_icon(u32 x,u32 k){
     static const u32 colors[4]={0x1b79d2,0x1e2431,0x4d7e91,0x5a616d};

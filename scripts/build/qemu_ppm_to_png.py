@@ -1,9 +1,9 @@
 """Convert QEMU P6 screendump to PNG using Python stdlib (no Pillow dependency)."""
 from pathlib import Path
-import struct,zlib
+import struct,zlib,sys
 root=Path(__file__).resolve().parents[2]
-source=root/'build/orbis-gui-desktop.ppm'
-target=root/'build/orbis-gui-desktop.png'
+source=Path(sys.argv[1]) if len(sys.argv)>1 else root/'build/orbis-gui-desktop.ppm'
+target=source.with_suffix('.png')
 with source.open('rb') as f:
     assert f.readline().strip()==b'P6'
     size=f.readline().strip()
