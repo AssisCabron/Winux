@@ -1,6 +1,8 @@
 # Winux — FAT16 somente leitura sobre o dispositivo de blocos PCI
 
-Data: 21/10/2026. Candidata experimental P4/foundation.
+Data: 21/10/2026. Documento da primeira fixture FAT16, preservada para regressões.
+A extensão atual com subdiretórios, arquivos de até 8 KiB e rejeição de cadeias
+cíclicas está documentada em [VFS-FAT16-TREE.md](VFS-FAT16-TREE.md).
 Os arquivos originais da ISO 0.38 e da P4 histórica permanecem intactos.
 
 ## Implementação
@@ -40,10 +42,11 @@ de traversal e arquivos inexistentes retornam VFS_NOT_FOUND.
 
 ## Restrições
 
-Este estágio suporta um volume FAT16 somente leitura, formato 8.3 no
-diretório raiz, arquivos de até 2048 bytes e setores de 512 bytes.
-Não há subdiretórios, long file names, arquivos grandes, cache,
-gravação, criação, renomeação, remoção, flush, journaling ou recovery.
+Esta fixture histórica comprova o primeiro volume FAT16 readonly de 512 bytes
+por setor. A versão atual da Foundation Preview permite caminhos 8.3 com
+subdiretórios até três componentes e arquivos limitados a 8192 bytes.
+Continuam ausentes nomes longos (LFN), leitura de arquivos maiores que esse
+limite, gravação, cache, criação, renomeação, remoção, flush e recovery.
 Montagem de volumes USB/SATA/NVMe físicos e dados pessoais está fora de
 escopo. O disco de 16 MiB é sempre apresentado como readonly pelo QEMU.
 
@@ -69,7 +72,8 @@ Artefatos:
 - build/console-foundations-p4-test.json
 - build/console-foundations-p4-serial.log
 
-O teste integrado final passou em 47 grupos QEMU. Uma verificação adicional
+A primeira regressão histórica passou em 47 grupos QEMU; a suíte integrada
+atual com extensão de diretórios e IPC bloqueante passou em 60 grupos. Uma verificação adicional
 foi incluída para desmontar o controlador PCI, invalidar a montagem VFS,
 rejeitar leituras durante a ausência do dispositivo e montar novamente.
 Os resultados da execução mais recente constam em

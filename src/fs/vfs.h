@@ -3,12 +3,12 @@
  * Future FAT32/ext/NTFS implementations may bind the same operations. */
 #ifndef WINUX_VFS_H
 #define WINUX_VFS_H
-#define WX_VFS_MAX_READ 2048U
-typedef struct {char name[13];u32 size,first_cluster;} wx_vfs_entry;
+#define WX_VFS_MAX_READ 8192U
+typedef struct {char name[13];u32 size,first_cluster;u8 attr;} wx_vfs_entry;
 typedef struct wx_vfs_volume wx_vfs_volume;
 typedef int (*wx_vfs_lookup_fn)(wx_vfs_volume*,const char*,wx_vfs_entry*);
 typedef int (*wx_vfs_read_fn)(wx_vfs_volume*,const wx_vfs_entry*,u8*,u32);
-typedef int (*wx_vfs_list_fn)(wx_vfs_volume*);
+typedef int (*wx_vfs_list_fn)(wx_vfs_volume*,const char *path);
 struct wx_vfs_volume {
     const char *type;
     void *backend;

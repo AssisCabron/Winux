@@ -24,7 +24,8 @@ __attribute__((used,noinline)) static u32 wx_timer_preempt_dispatch(u64 *frame) 
     /* An involuntary IRQ must preserve RAX exactly. Unlike YIELD,
      * there is no syscall return value to write into user registers. */
     u64 frame_va=(u64)frame;
-    wx_proc_thread *thread=&wx_proc_current_irq->thread;
+    wx_proc_thread *thread=wx_proc_current_thread?
+                           wx_proc_current_thread:&wx_proc_current_irq->thread;
     u64 stack_base=(u64)thread->kernel_stack;
     if(frame_va<stack_base || frame_va+20*8>stack_base+sizeof(thread->kernel_stack))
         wx_timer_stack_error=1;
@@ -123,6 +124,7 @@ static int wx_timer_execute(wx_managed_process *process,u32 index,int resume) {
     wx_proc_thread *thread=&process->thread;
     u64 old_cr3=wx_read_cr3();
     wx_proc_current_irq=process;
+    wx_proc_current_thread=thread;
     wx_user_resume_target=&thread->frame;
     wx_user_yielded=0;
     wx_timer_preempt_triggered=0;
@@ -140,6 +142,7 @@ static int wx_timer_execute(wx_managed_process *process,u32 index,int resume) {
     __asm__ volatile("fxrstor64 %0"::"m"(wx_timer_kernel_fx):"memory");
     wx_load_cr3(old_cr3);
     wx_active=0;wx_user_resume_target=0;wx_proc_current_irq=0;
+    wx_proc_current_thread=0;
     if(resume)thread->resume_count++;
     if(wx_fault_vector)return 0;
     if(!resume){
@@ -222,6 +225,7 @@ done:
     wx_tss.rsp0=old_rsp0;
     wx_load_cr3(original_cr3);
     wx_active=0;wx_user_resume_target=0;wx_proc_current_irq=0;
+    wx_proc_current_thread=0;
     if(first){
         if(first->state!=WX_PROC_EXITED)first->state=WX_PROC_FAILED;
         if(!wx_proc_reap(first))ok=0;

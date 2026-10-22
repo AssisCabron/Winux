@@ -15,6 +15,7 @@
 #define WX_NATIVE_IPC_SEND 5U /* RDI=target PID, RSI=64-bit value, RAX=1 accepted or 0 rejected. */
 #define WX_NATIVE_IPC_RECEIVE 6U /* Returns one queued value, or 0 if empty; source PID comes from kernel. */
 #define WX_NATIVE_SLEEP_TICKS 7U /* RDI=1..1000 PIT ticks; thread BLOCKED until wake tick. */
+#define WX_NATIVE_IPC_RECEIVE_WAIT 8U /* Service receive: block on empty mailbox; 30-tick timeout, 0 on timeout. */
 #define WX_NATIVE_STDOUT_HANDLE 1U
 #define WX_NATIVE_MAX_WRITE 256U
 #endif

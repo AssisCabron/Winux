@@ -63,6 +63,12 @@ __attribute__((noreturn)) void kernel_main(boot_context *ctx) {
  serial("KERNEL: IDT and PIT ready\r\n");
  if(!paging_init()){print("PAGING_INIT_FAILED: unsupported memory layout or CPU\n");for(;;)__asm__ volatile("cli; hlt");}
  serial("KERNEL: OWN_CR3_ACTIVE WP NX\r\n");
+#ifdef WINUX_INTEL_VTD_PREVIEW
+ if(!wx_vtd_discover()){
+  print("VTD_DMAR_FAILED: required Intel VT-d DRHD not found or unsupported\n");
+  for(;;)__asm__ volatile("cli; hlt");
+ }
+#endif
  keyboard_init();
  serial(pool_test()?"[OK] Reserved page allocator self-test\r\n":"[FAIL] Page allocator self-test\r\n");
  print("Winux [version 0.38-P4-test]\n\n");

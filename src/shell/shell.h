@@ -178,6 +178,7 @@ static int pe_test(void) {
 #ifdef WINUX_TIMER_PREEMPT_PREVIEW
 #include "../process/timer_preemption_preview.h"
 #include "../tests/process/process_wait_test.h"
+#include "../tests/process/multithread_test.h"
 #endif
 #ifdef WINUX_SERVICE_PREVIEW
 #include "../process/service_manager_preview.h"
@@ -189,13 +190,22 @@ static int pe_test(void) {
 #include "../storage/block_core.h"
 #include "../device/pci_pnp.h"
 #include "../device/dma.h"
+#ifdef WINUX_INTEL_VTD_PREVIEW
+#include "../device/intel_vtd.h"
+#endif
 #ifdef WINUX_VFS_PREVIEW
 #include "../fs/vfs.h"
 #endif
 #include "../storage/virtio_blk_legacy.h"
+#ifdef WINUX_INTEL_VTD_PREVIEW
+#include "../storage/virtio_blk_modern.h"
+#endif
 #ifdef WINUX_VFS_PREVIEW
 #include "../fs/fat16_ro.h"
 #endif
+#endif
+#if defined(WINUX_BLOCK_PREVIEW) && defined(WINUX_TIMER_PREEMPT_PREVIEW)
+#include "../tests/process/isolation_dma_test.h"
 #endif
 
 static void command(char *line, unsigned depth) {
@@ -267,7 +277,11 @@ static void command(char *line, unsigned depth) {
     }
 #endif
     #ifdef WINUX_BLOCK_PREVIEW
+#ifdef WINUX_INTEL_VTD_PREVIEW
+    else if (same(line,"block-test"))print(wx_mod_block_test()?"BLOCK_TEST_OK\n":"BLOCK_TEST_FAILED\n");
+#else
     else if (same(line,"block-test"))print(wx_block_device_test() ? "BLOCK_TEST_OK\n" : "BLOCK_TEST_FAILED\n");
+#endif
     #endif
 #ifdef WINUX_PROC_SPACE_PREVIEW
     else if (same(line, "proc-space-test"))print(wx_address_space_test() ? "PROC_TEST_OK\n" : "PROC_TEST_FAILED\n");
@@ -277,15 +291,19 @@ static void command(char *line, unsigned depth) {
 #endif
 #ifdef WINUX_SERVICE_PREVIEW
     else if(same(line,"ps"))wx_proc_list();
+    else if(same(line,"threads"))wx_proc_thread_list();
     else if(same(line,"services"))wx_service_status();
     else if(same(line,"ipc-test"))
         print(wx_service_ipc_guard_test()?"IPC_TEST_OK\n":"IPC_TEST_FAILED\n");
+    else if(same(line,"ipc-wait-test"))
+        print(wx_service_ipc_block_test()?"IPC_WAIT_TEST_OK\n":"IPC_WAIT_TEST_FAILED\n");
     else if(same(line,"svc"))wx_service_command(arg);
 #endif
 #ifdef WINUX_VFS_PREVIEW
     else if(same(line,"fs-test"))print(wx_vfs_fat_test()?"VFS_TEST_OK\n":"VFS_TEST_FAILED\n");
+    else if(same(line,"fs-tree-test"))print(wx_fat_tree_test()?"VFS_TREE_TEST_OK\n":"VFS_TREE_TEST_FAILED\n");
     else if(same(line,"lsdisk")){
-        if(!wx_root_volume.list || !wx_root_volume.list(&wx_root_volume))
+        if(!wx_root_volume.list || !wx_root_volume.list(&wx_root_volume,arg))
             print("VFS_LIST_FAILED\n");
     }
     else if(same(line,"catdisk")){
@@ -304,10 +322,22 @@ static void command(char *line, unsigned depth) {
 #ifdef WINUX_TIMER_PREEMPT_PREVIEW
     else if(same(line,"preempt-test"))print(wx_timer_preemption_test()?"PREEMPT_TEST_OK\n":"PREEMPT_TEST_FAILED\n");
     else if(same(line,"wait-test"))print(wx_process_wait_test()?"WAIT_TEST_OK\n":"WAIT_TEST_FAILED\n");
+    else if(same(line,"threads-test"))print(wx_multithread_test()?"THREADS_TEST_OK\n":"THREADS_TEST_FAILED\n");
+#ifdef WINUX_BLOCK_PREVIEW
+    else if(same(line,"isolation-test"))print(wx_isolation_dma_test()?"ISOLATION_TEST_OK\n":"ISOLATION_TEST_FAILED\n");
+#endif
     else if(same(line,"sched-status"))wx_timer_status();
 #endif
 #ifdef WINUX_PROC_MANAGER_PREVIEW
     else if(same(line,"process-test"))print(wx_process_manager_test()?"PROC_MANAGER_TEST_OK\n":"PROC_MANAGER_TEST_FAILED\n");
+#endif
+#ifdef WINUX_BLOCK_PREVIEW
+    else if(same(line,"dma-status"))wx_dma_report();
+#ifdef WINUX_INTEL_VTD_PREVIEW
+    else if(same(line,"vtd-status"))wx_vtd_report();
+    else if(same(line,"vtd-fault-test"))print(wx_mod_fault_test()?"VTD_FAULT_TEST_OK\n":"VTD_FAULT_TEST_FAILED\n");
+    else if(same(line,"vtd-invalidate-test"))print(wx_mod_invalidation_test()?"VTD_INVALIDATION_TEST_OK\n":"VTD_INVALIDATION_TEST_FAILED\n");
+#endif
 #endif
     else if (same(line, "nt-missing"))nt_missing_report();
     else if (same(line, "nt-missing-reset")){nt_missing_reset();print("NT_MISSING_RESET_OK\n");}

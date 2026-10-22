@@ -40,6 +40,14 @@ static u64 wx_service_ipc_send(u32 sender_pid,u32 receiver_pid,u64 value){
     if(!wx_service_running(sender) || !wx_service_running(receiver))
         return 0;
     if(receiver->ipc_pending){sender->ipc_rejected++;return 0;}
+    /* The existing mailbox is the only IPC queue. A sleeping receiver
+     * gets the value directly in the saved INT80 return register; it must
+     * NOT also remain queued, which would duplicate the message. */
+    if(wx_proc_notify_ipc(receiver->process,value)){
+        sender->ipc_sent++;
+        receiver->ipc_received++;
+        return 1;
+    }
     receiver->ipc_value=value;receiver->ipc_pending=1;sender->ipc_sent++;
     return 1;
 }
@@ -50,6 +58,21 @@ static u64 wx_service_ipc_receive(u32 receiver_pid){
     u64 value=receiver->ipc_value;
     receiver->ipc_value=0;receiver->ipc_pending=0;receiver->ipc_received++;
     return value;
+}
+/* A single CPL3 IPC receive with bounded wait, backed by the same mailbox.
+ * If a message exists, consume immediately. Otherwise atomically mark the
+ * current managed recipient BLOCKED while running on its syscall stack.
+ * Timeout is delivered by wx_proc_wake_blocked as RAX=0. */
+static u64 wx_service_ipc_receive_wait(u32 receiver_pid,int *blocked){
+    if(!blocked)return 0;
+    *blocked=0;
+    if(receiver_pid!=402 || !wx_current_service_pid ||
+       !wx_proc_current_irq || !wx_service_running(&wx_services[1]))return 0;
+    wx_resident_service *receiver=&wx_services[1];
+    if(receiver->ipc_pending)return wx_service_ipc_receive(receiver_pid);
+    if(!wx_proc_request_ipc_wait(30))return 0;
+    *blocked=1;
+    return 0;
 }
 static int wx_service_ipc_guard_test(void){
     if(wx_service_ipc_send(0,402,123) || wx_service_ipc_send(401,999,456) ||
@@ -76,7 +99,7 @@ static void wx_service_compile(wx_resident_service *s){
         code[n++]=0xb8;*(u32*)(code+n)=WX_NATIVE_IPC_SEND;n+=4;
         code[n++]=0xcd;code[n++]=0x80;
     }else if(s->pid==402){
-        code[n++]=0xb8;*(u32*)(code+n)=WX_NATIVE_IPC_RECEIVE;n+=4;
+        code[n++]=0xb8;*(u32*)(code+n)=WX_NATIVE_IPC_RECEIVE_WAIT;n+=4;
         code[n++]=0xcd;code[n++]=0x80;
         code[n++]=0x48;code[n++]=0xbb;*(u64*)(code+n)=WX_USER_STACK+WX_SERVICE_IPC_OFFSET;n+=8;
         code[n++]=0x48;code[n++]=0x89;code[n++]=0x03;
@@ -109,6 +132,7 @@ static int wx_service_step(wx_resident_service *s){
     wx_fault_vector=0;wx_fault_error=0;wx_active=1;
     wx_current_service_pid=s->process->pid;
     wx_proc_current_irq=s->process;
+    wx_proc_current_thread=&s->process->thread;
     s->process->state=WX_PROC_RUNNING;
     u64 original_rsp0=wx_tss.rsp0;
     wx_tss.rsp0=((u64)s->process->thread.kernel_stack+
@@ -125,6 +149,7 @@ static int wx_service_step(wx_resident_service *s){
     wx_tss.rsp0=original_rsp0;
     wx_active=0;wx_user_resume_target=0;wx_current_service_pid=0;
     wx_proc_current_irq=0;
+    wx_proc_current_thread=0;
     s->last_run_ticks=timer_ticks;
     if(s->process->state!=WX_PROC_BLOCKED)
         s->process->next_ready_tick=timer_ticks+WX_SERVICE_POLL_TICKS;
@@ -169,6 +194,7 @@ static int wx_service_start(wx_resident_service *s){
     s->process->thread.started=0;
     s->last_run_ticks=timer_ticks;
     s->process->next_ready_tick=timer_ticks+WX_SERVICE_POLL_TICKS;
+    s->process->wait_kind=WX_WAIT_NONE;
     s->last_sample=0;s->process->quanta=0;s->process->thread.started=0;s->process->exit_code=0;
     s->ipc_pending=0;s->ipc_value=0;s->last_ipc_tick=0;
     s->ipc_sent=0;s->ipc_received=0;s->ipc_rejected=0;
@@ -223,6 +249,78 @@ static int wx_service_poll(void){
         if(s->process==next)return wx_service_step(s);
     }
     return 0; /* generic non-service executables need their loader policy */
+}
+/* End-to-end guest test: the existing CPL3 memd must really block
+ * on an empty IPC queue, and real clockd sends through INT80 to wake it.
+ * A second pass uses the PIT deadline to wake with RAX=0. */
+static int wx_service_ipc_block_test(void){
+    wx_resident_service *sender=&wx_services[0],*receiver=&wx_services[1];
+    if(wx_active || !sender->process || !receiver->process)return 0;
+    const u32 free_before=wx_proc_free_pages();
+    const u32 wait_before=wx_proc_ipc_waits,wake_before=wx_proc_ipc_wakes;
+    const u32 timeout_before=wx_proc_ipc_timeouts;
+    int ok=1;
+    if(wx_service_running(sender) && !wx_service_stop(sender))return 0;
+    if(wx_service_running(receiver) && !wx_service_stop(receiver))return 0;
+
+    /* First round: blocked receiver, then authenticated clockd syscall. */
+    if(!wx_service_start(receiver) || !wx_service_step(receiver) ||
+       receiver->process->state!=WX_PROC_BLOCKED ||
+       receiver->process->wait_kind!=WX_WAIT_IPC ||
+       receiver->ipc_pending || wx_proc_ipc_waits!=wait_before+1)
+        ok=0;
+    u64 queued_deadline=receiver->process->next_ready_tick;
+    wx_proc_wake_blocked();
+    if(ok && timer_ticks<queued_deadline &&
+       receiver->process->state!=WX_PROC_BLOCKED)ok=0;
+    if(ok && (!wx_service_start(sender) || !wx_service_step(sender)))ok=0;
+    u64 delivered=receiver->process->thread.frame.regs[0];
+    if(ok && (!delivered || receiver->process->state!=WX_PROC_READY ||
+              receiver->process->wait_kind!=WX_WAIT_NONE ||
+              receiver->ipc_pending || wx_proc_ipc_wakes!=wake_before+1 ||
+              wx_proc_ipc_timeouts!=timeout_before))ok=0;
+    if(ok && (!wx_service_step(receiver) || receiver->last_ipc_tick!=delivered ||
+              receiver->process->wait_kind!=WX_WAIT_TIMER))ok=0;
+    if(wx_service_running(sender) && !wx_service_stop(sender))ok=0;
+    if(wx_service_running(receiver) && !wx_service_stop(receiver))ok=0;
+
+    /* Second round: no sender; the same user syscall must time out after
+     * 30 REAL PIT ticks. The message return must be 0 and no stale mail. */
+    if(ok && (!wx_service_start(receiver) || !wx_service_step(receiver) ||
+              receiver->process->state!=WX_PROC_BLOCKED ||
+              receiver->process->wait_kind!=WX_WAIT_IPC))ok=0;
+    u64 deadline=receiver->process->next_ready_tick;
+    if(ok){
+        for(u32 spins=0;spins<128 && timer_ticks<deadline;spins++)
+            __asm__ volatile("sti; hlt":::"memory");
+        if(timer_ticks<deadline)ok=0;
+        wx_proc_wake_blocked();
+        if(receiver->process->state!=WX_PROC_READY ||
+           receiver->process->wait_kind!=WX_WAIT_NONE ||
+           receiver->process->thread.frame.regs[0]!=0 ||
+           wx_proc_ipc_timeouts!=timeout_before+1)ok=0;
+    }
+    if(ok && (!wx_service_step(receiver) || receiver->last_ipc_tick!=0))
+        ok=0;
+    if(wx_service_running(receiver) && !wx_service_stop(receiver))ok=0;
+    if(wx_proc_free_pages()!=free_before)ok=0;
+    if(ok)print("IPC_WAIT_WAKE_OK: CPL3 memd blocked, clockd INT80 delivered saved RAX and early READY wake\n");
+    else{
+        print("IPC_WAIT_WAKE_FAILED sender=");number(sender->process->state);
+        print(" receiver=");number(receiver->process->state);
+        print(" kind=");number(receiver->process->wait_kind);
+        print(" pending=");number(receiver->ipc_pending);
+        print(" value=");number(delivered);
+        print(" last=");number(receiver->last_ipc_tick);
+        print(" waits=");number(wx_proc_ipc_waits-wait_before);
+        print(" wakes=");number(wx_proc_ipc_wakes-wake_before);
+        print(" timeouts=");number(wx_proc_ipc_timeouts-timeout_before);
+        print(" ticks=");number(timer_ticks);
+        print(" deadline=");number(queued_deadline);
+        print("\n");
+    }
+    if(ok)print("IPC_WAIT_TIMEOUT_OK: real PIT deadline returns 0, empty mailbox, no page leak\n");
+    return ok;
 }
 static void wx_service_status(void){
     print("SERVICE_LIST_BEGIN\n");

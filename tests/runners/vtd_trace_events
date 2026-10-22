@@ -1,0 +1,9 @@
+vtd_dmar_translate
+vtd_dmar_fault
+vtd_switch_address_space
+vtd_reg_write_gcmd
+vtd_translate_pt
+vtd_page_walk_one
+vtd_iotlb_page_update
+vtd_re_not_present
+vtd_ce_not_present

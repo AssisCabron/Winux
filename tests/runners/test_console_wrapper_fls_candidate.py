@@ -26,9 +26,14 @@ parser.add_argument('--check-scheduler',action='store_true',help='Verify real Wi
 parser.add_argument('--check-user-scheduler',action='store_true',help='Require two CPL3 process continuations to resume after native yield')
 parser.add_argument('--check-services',action='store_true',help='Verify resident CPL3 clockd autostart, scheduling, listing, stop and restart')
 parser.add_argument('--check-vfs',action='store_true',help='Verify FAT16 read-only mount, root listing and file contents')
+parser.add_argument('--check-fat16-tree',action='store_true',help='Verify FAT16 subdirectories, 6 KiB scattered chains and cyclic FAT rejection')
 parser.add_argument('--check-preemption',action='store_true',help='Assert PIT IRQ0 interrupts two CPU-bound non-yielding CPL3 programs')
 parser.add_argument('--check-permanent',action='store_true',help='Assert the PIC/PIT handler remains armed across workloads and services use process-manager ready queue')
 parser.add_argument('--check-sleep',action='store_true',help='Check actual CPL3 sleep syscall, BLOCKED state and PIT-driven wakeups')
+parser.add_argument('--check-multithread',action='store_true',help='Verify two CPL3 threads in one PID/CR3 with distinct user stacks, TIDs and MXCSR')
+parser.add_argument('--check-ipc-wait',action='store_true',help='Real CPL3 IPC receive blocking, direct wakeup and timeout')
+parser.add_argument('--check-isolation-dma',action='store_true',help='CPL3 cross-process/DMA-pool #PF, DMA coherent pool and revoked device mappings')
+parser.add_argument('--check-vtd',action='store_true',help='Enable Intel VT-d Q35 emulation and validate hardware second-level translation')
 parser.add_argument('--check-process-manager',action='store_true',help='Verify repeated process spawn, exit, resource reaping and free-page invariants')
 args=parser.parse_args()
 assert re.fullmatch(r'[a-zA-Z0-9-]{1,70}',args.result_tag), 'Invalid result tag'
@@ -49,10 +54,12 @@ command=[str(qemu),'-machine','q35','-accel','tcg','-m','256M','-smp','1',
  '-cdrom',str(iso),'-boot','d','-display','none','-nic','none','-no-reboot',
  '-serial',f'tcp:127.0.0.1:{serial_port},server=on,wait=off',
  '-qmp',f'tcp:127.0.0.1:{qmp_port},server=on,wait=off']
+if args.check_vtd:
+    command += ['-device','intel-iommu,aw-bits=48,caching-mode=on']
 if args.block_image:
     block_image=(root/args.block_image if not args.block_image.is_absolute() else args.block_image).resolve()
     assert block_image.is_file() and (root/'build') in block_image.parents and block_image.suffix.lower()=='.img'
-    permitted={'driver-test-disk.img':4096,'fat16-test-disk.img':32768}
+    permitted={'driver-test-disk.img':4096,'fat16-test-disk.img':32768,'fat16-tree-disk.img':32768}
     assert block_image.name in permitted and block_image.stat().st_size==permitted[block_image.name]*512
     command += ['-drive',f'if=none,id=winux-block-test,file={block_image},format=raw,readonly=on',
                 '-device','virtio-blk-pci,drive=winux-block-test,disable-modern=on']
@@ -91,17 +98,38 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
         def send(line,expected):
             before=len(output);serial.sendall((line+'\r').encode());return wait_for(expected,before)
         wait_for('KERNEL: CONSOLE_READY',timeout=45)
+        if args.check_vtd:
+            assert 'VTD_DMAR_OK: ACPI XSDT/DMAR checksum' in output,output[-2000:]
+            vtd=send('vtd-status','faults=')
+            assert 'present=1' in vtd,vtd
+            checks.append('ACPI RSDP/XSDT/DMAR parsed with checksum, DRHD PCI segment0')
         if args.block_image:
             for cycle in range(2):
                 block_text=send('block-test','BLOCK_TEST_OK')
                 assert 'PNP_DMA_GUARD_OK: PCI exact match' in block_text
+            if args.check_isolation_dma:
+                assert 'DMA_APERTURE_OK: dedicated 32KiB coherent pool' in block_text
+                assert 'DMA_REVOKE_OK: stale bus addresses invalidated' in block_text
+                assert 'DMA_GENERATION_OK: stale registration token denied after same PCI device rebound' in block_text
+                assert 'DMA_BUSMASTER_OFF_OK: detached PCI function retains bus mastering disabled' in block_text
+                assert 'DMA_MASTER_GUARD_OK: active bus master cannot revoke or scrub' in block_text
+            if args.check_vtd:
+                assert 'VTD_DOMAIN_OK: legacy second-level page tables' in block_text,block_text
+                checks.append('VT-d domain BDF, hardware second-level translation, live VirtIO block DMA read')
                 assert 'BLOCK_READ_OK: post-UEFI PCI legacy VirtIO' in block_text
                 assert 'PNP_DEVICE_LIFECYCLE_OK: detach/reprobe' in block_text
-                expected_sectors=32768 if args.check_vfs else 4096
+                expected_sectors=32768 if block_image.name.startswith('fat16') else 4096
                 assert f'driver=virtio-blk-legacy sectors={expected_sectors} sector_size=512' in block_text
             checks.append('two post-UEFI PCI VirtIO read-only cycles with driver detachment, DMA cleanup and rebinding')
+            if args.check_isolation_dma:
+                checks.append('PCI bus mastering guard refuses premature DMA revocation and preserves live pool')
+                status=send('dma-status','DMA_STATUS_END')
+                assert 'DMA_STATUS pool_bytes=32768 reserved_bytes=0 mappings=0' in status
+                assert 'iommu=not-configured' in status
+                assert re.search(r'generation=[1-9][0-9]* rejected=[1-9][0-9]*',status),status
+                checks.append('DMA status shows zero orphan allocations after two device cycles and explicitly reports no IOMMU')
         if args.check_vfs:
-            assert args.block_image and block_image.name=='fat16-test-disk.img'
+            assert args.block_image and block_image.name in ('fat16-test-disk.img','fat16-tree-disk.img')
             mounted=send('fs-test','VFS_TEST_OK')
             assert 'VFS_FAT16_OK: readonly mount, 2 root files' in mounted
             listing=send('lsdisk','VFS_LIST_END')
@@ -120,6 +148,21 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
             assert 'VFS_FAT16_OK:' in remount
             assert 'WINUX_FAT16_RUNTIME_READ_OK' in send('catdisk STATUS.TXT','VFS_READ_OK')
             checks.append('block device detach invalidates VFS mount and remount restores FAT16 file access')
+            if args.check_fat16_tree:
+                assert block_image.name=='fat16-tree-disk.img'
+                result=send('fs-tree-test','VFS_TREE_TEST_OK')
+                assert 'VFS_TREE_OK: readonly subdirectory, 6144-byte noncontiguous FAT chain' in result
+                rootdir=send('lsdisk','VFS_LIST_END')
+                assert 'VFS_DIR LOGS' in rootdir
+                subdir=send('lsdisk LOGS','VFS_LIST_END')
+                assert 'VFS_FILE REPORT.TXT bytes=6144' in subdir
+                assert 'VFS_DIR ARCHIVE' in subdir
+                nested=send('lsdisk LOGS/ARCHIVE','VFS_LIST_END')
+                assert 'VFS_FILE NOTES.TXT bytes=1536' in nested
+                assert 'VFS_NOT_FOUND' in send('catdisk LOGS/LOOP.TXT','VFS_NOT_FOUND')
+                assert 'VFS_NOT_FOUND' in send('catdisk LOGS/../STATUS.TXT','VFS_NOT_FOUND')
+                assert 'VFS_LIST_FAILED' in send('lsdisk ../LOGS','VFS_LIST_FAILED')
+                checks.append('FAT16 nested directories, 6 KiB scattered file, cyclic cluster chain and traversal rejected')
         if args.check_permanent:
             assert 'PIT_IRQ_PERSISTENT_READY' in output
             armed=send('sched-status','ready_selector=process_manager')
@@ -145,10 +188,29 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
             assert resumed[1]>after[1] and resumed[2]>after[2],(begin,after,resumed)
             listing=send('ps','PROCESS_LIST_END')
             assert 'PROCESS pid=401' in listing and 'PROCESS pid=402' in listing
+            assert 'sched_state=' in listing and 'tid=1604' in listing and 'tid=1608' in listing
+            thread_list=send('threads','THREAD_LIST_END')
+            assert re.search(r'THREAD tid=1604 pid=401 state=(BLOCKED|READY)',thread_list),thread_list
+            assert re.search(r'THREAD tid=1608 pid=402 state=(BLOCKED|READY)',thread_list),thread_list
+            checks.append('ps/threads expose genuine TIDs and READY/BLOCKED thread state for two CPL3 services')
             checks.append('real CPL3 SLEEP_TICKS blocks services; PIT wakes threads via Process Manager, no busy loop')
             wait_contract=send('wait-test','WAIT_TEST_OK')
             assert 'THREAD_WAIT_OK: invalid durations rejected, BLOCKED excluded until PIT deadline' in wait_contract
             checks.append('native sleep contract rejects invalid durations and PIT deadline wakes a managed transient thread without memory leaks')
+        if args.check_isolation_dma:
+            for cycle in range(2):
+                isolated=send('isolation-test','ISOLATION_TEST_OK')
+                assert 'CPU_ISOLATION_OK: two CR3 roots, RX vs NX/RW' in isolated
+                assert 'ISOLATION_REAP_OK: user faults contained' in isolated
+                assert 'CPU_WX_NX_OK: CPL3 write to RX code and execution from RW/NX stack rejected' in isolated
+            checks.append('twice: CPL3 cross-process/DMA pool access faults, page permissions, syscall pointer checks and reaping')
+            checks.append('dedicated 32KiB DMA aperture, explicit direction, revocation and reprobe of PCI block device')
+        if args.check_multithread:
+            for cycle in range(2):
+                multithread=send('threads-test','THREADS_TEST_OK')
+                assert 'MULTITHREAD_CPL3_OK: 6 threads in 3 shared-CR3 processes' in multithread
+                assert 'unique TIDs/user stacks/RSP0, independent MXCSR' in multithread
+            checks.append('12 CPL3 threads in six shared-address-space processes with independent user stacks, FXSTATE and full reaping')
         if args.check_process_manager:
             for cycle in range(2):
                 record=send('process-test','PROC_MANAGER_TEST_OK')
@@ -280,6 +342,11 @@ with (build/f'{tag}-stderr.log').open('w') as stderr:
             assert 'cr3='+mem_cr3.group(1) in restarted_mem
             send('svc stop memd','SERVICE_STOP_OK')
             checks.append('two distinct CPL3 services: independent PIDs/CR3, live memory syscall, stop/restart and unknown-service rejection')
+        if args.check_ipc_wait:
+            trace=send('ipc-wait-test','IPC_WAIT_TEST_OK')
+            assert 'IPC_WAIT_WAKE_OK: CPL3 memd blocked, clockd INT80 delivered saved RAX' in trace
+            assert 'IPC_WAIT_TIMEOUT_OK: real PIT deadline returns 0' in trace
+            checks.append('real CPL3 IPC waits on empty mailbox, direct wake via native sender and PIT timeout without leaked pages')
         assert 'AFTER_EXIT_BOOT_SERVICES' in output and '[OK] Reserved page allocator' in output
         checks.append('post-firmware console and allocator self-test')
         assert 'KERNEL: OWN_CR3_ACTIVE WP NX' in output

@@ -2,14 +2,23 @@ param([string]$Python = "$env:ProgramFiles\Python310\python.exe")
 $ErrorActionPreference='Stop'
 $root=(Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $build=Join-Path $root 'build'
-$disk=Join-Path $build 'vfs-preview\fat16-test-disk.img'
+$disk=Join-Path $build 'vfs-preview\fat16-tree-disk.img'
+$baseFat=Join-Path $build 'vfs-preview\fat16-test-disk.img'
 if (-not (Test-Path -LiteralPath $Python)) {throw "Python missing: $Python"}
-if (-not (Test-Path -LiteralPath $disk)) {
+if (-not (Test-Path -LiteralPath $baseFat)){
     & $Python (Join-Path $root 'scripts\build\make_fat16_fixture.py')
+    if($LASTEXITCODE -ne 0){throw 'Legacy FAT16 fixture creation failed'}
+}
+$baseFatHash=(Get-FileHash -LiteralPath $baseFat -Algorithm SHA256).Hash
+if($baseFatHash -ne 'AEBAC5A28CADBA1CBA25D479412878AEAEA8FC8A084AA2E3EE15C0FFFED00C69'){
+    throw 'Original FAT16 fixture changed - refusing to continue'
+}
+if (-not (Test-Path -LiteralPath $disk)) {
+    & $Python (Join-Path $root 'scripts\build\make_fat16_tree_fixture.py')
     if($LASTEXITCODE -ne 0){throw "Failed to create isolated block fixture"}
 }
 $diskBefore=(Get-FileHash -LiteralPath $disk -Algorithm SHA256).Hash
-if($diskBefore -ne 'AEBAC5A28CADBA1CBA25D479412878AEAEA8FC8A084AA2E3EE15C0FFFED00C69'){
+if($diskBefore -ne 'F88540F059EAB658AB51D02E313A3847DD14D55F3C9184A7AA6ED190BA6748DA'){
     throw "FAT16 fixture has unexpected content. Preserve it; do not overwrite automatically."
 }
 $legacyDisk=Join-Path $build 'block-preview\driver-test-disk.img'
@@ -31,11 +40,14 @@ $env:ZIG_GLOBAL_CACHE_DIR=Join-Path $root 'tools\zig-cache'
 if($LASTEXITCODE -ne 0){throw 'Existing NT ABI contract validation failed'}
 & $Python (Join-Path $root 'scripts\build\make_proc_space_preview.py') --experiment integration
 if($LASTEXITCODE -ne 0){throw 'Foundation ISO compilation failed'}
-& $Python (Join-Path $root 'tests\runners\test_console_wrapper_fls_candidate.py') --iso 'build/foundation-preview/winux-0.38-wrapper-fls-candidate.iso' --result-tag console-foundations-p4 --block-image 'build/vfs-preview/fat16-test-disk.img' --check-proc-space --check-scheduler --check-user-scheduler --check-services --check-vfs --check-process-manager --check-preemption --check-permanent --check-sleep | Out-Null
+& $Python (Join-Path $root 'tests\runners\test_console_wrapper_fls_candidate.py') --iso 'build/foundation-preview/winux-0.38-wrapper-fls-candidate.iso' --result-tag console-foundations-p4 --block-image 'build/vfs-preview/fat16-tree-disk.img' --check-proc-space --check-scheduler --check-user-scheduler --check-services --check-vfs --check-process-manager --check-preemption --check-permanent --check-sleep --check-multithread --check-ipc-wait --check-fat16-tree --check-isolation-dma | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Foundation QEMU regression failed'}
 $result=Get-Content (Join-Path $build 'console-foundations-p4-test.json') -Raw|ConvertFrom-Json
-if(-not $result.passed -or $result.checks.Count -lt 57){throw 'Missing foundation test groups'}
+if(-not $result.passed -or $result.checks.Count -lt 65){throw 'Missing foundation test groups'}
 if((Get-FileHash -LiteralPath $disk -Algorithm SHA256).Hash -ne $diskBefore){throw 'Fixture disk was changed'}
+if((Get-FileHash -LiteralPath $baseFat -Algorithm SHA256).Hash -ne $baseFatHash){
+    throw 'Original FAT16 image changed during integration'
+}
 foreach($name in $gold.Keys) {
     if((Get-FileHash -LiteralPath (Join-Path $build $name) -Algorithm SHA256).Hash -ne $gold[$name]) {
         throw "Stable image changed during integration: $name"

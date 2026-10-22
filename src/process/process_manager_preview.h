@@ -10,6 +10,7 @@
 #define WX_PROC_SERVICE_OFFSET 4U
 enum {WX_PROC_FREE=0,WX_PROC_READY=1,WX_PROC_RUNNING=2,
       WX_PROC_EXITED=3,WX_PROC_FAILED=4,WX_PROC_BLOCKED=5};
+enum {WX_WAIT_NONE=0,WX_WAIT_TIMER=1,WX_WAIT_IPC=2};
 /* One managed thread per CPL3 process in this phase. Its user trap-frame,
  * x87/SSE state and TSS RSP0 stack must have the same lifecycle as the PID.
  * Future multiple threads can extend this structure without parallel tables. */
@@ -21,6 +22,7 @@ typedef struct {
     u32 interrupt_count;
     u32 resume_count;
     u32 started;
+    u32 tid;
 } wx_proc_thread;
 _Static_assert(__builtin_offsetof(wx_proc_thread,fxstate)%16==0,
                "FXSAVE state must be 16-byte aligned");
@@ -31,19 +33,24 @@ typedef struct {
     u64 owned_event;
     u32 pid,state,exit_code;
     u32 resident,quanta;
+    u32 wait_kind;
     u64 next_ready_tick;
     const char *name;
 #ifdef WINUX_TIMER_PREEMPT_PREVIEW
     wx_proc_thread thread;
+    wx_proc_thread sibling;
+    void *sibling_user_stack;
 #endif
 } wx_managed_process;
 static wx_managed_process wx_process_table[WX_PROC_CAPACITY];
 #ifdef WINUX_TIMER_PREEMPT_PREVIEW
 static wx_managed_process *wx_proc_current_irq;
+static wx_proc_thread *wx_proc_current_thread;
 #endif
 static u32 wx_next_process_id=600;
 static u32 wx_proc_rr_cursor;
 static u32 wx_proc_sleep_calls,wx_proc_wake_count,wx_proc_invalid_sleeps;
+static u32 wx_proc_ipc_waits,wx_proc_ipc_wakes,wx_proc_ipc_timeouts;
 
 static u32 wx_proc_free_pages(void){
     u32 available=0;
@@ -79,6 +86,9 @@ static wx_managed_process *wx_proc_resident(unsigned index,u32 pid,const char *n
             wx_space_destroy(&p->space);pg_zero(p,sizeof(*p));return 0;
         }
         p->pid=pid;p->name=name;p->resident=1;
+#ifdef WINUX_TIMER_PREEMPT_PREVIEW
+        p->thread.tid=pid*4U;
+#endif
         p->state=WX_PROC_EXITED;
     }
     return (p->resident && p->pid==pid && p->name==name)?p:0;
@@ -98,6 +108,7 @@ static int wx_proc_request_sleep(u64 ticks){
         return 0;
     }
     p->next_ready_tick=timer_ticks+ticks;
+    p->wait_kind=WX_WAIT_TIMER;
     p->state=WX_PROC_BLOCKED;
     wx_proc_sleep_calls++;
     return 1;
@@ -108,11 +119,39 @@ static int wx_proc_request_sleep(u64 ticks){
 /* Release expired waits for ALL managed processes, not only services.
  * Nothing may run while state==BLOCKED. Timer tick is monotonic in this
  * current one-CPU PIT setup; overflow is rejected when sleep is requested. */
+/* IPC uses the same blocked state/deadline but may be signaled early.
+ * Only the active recipient process may wait; pending mailboxes are
+ * checked by the service layer before entering this state. */
+static int wx_proc_request_ipc_wait(u64 ticks){
+    wx_managed_process *p=wx_proc_current_irq;
+    if(!p || !wx_active || !p->resident || p->state!=WX_PROC_RUNNING ||
+       !ticks || ticks>1000 || timer_ticks>~0ULL-ticks)return 0;
+    p->state=WX_PROC_BLOCKED;
+    p->wait_kind=WX_WAIT_IPC;
+    p->next_ready_tick=timer_ticks+ticks;
+    wx_proc_ipc_waits++;
+    return 1;
+}
+static int wx_proc_notify_ipc(wx_managed_process *p,u64 message){
+    if(!p || p->state!=WX_PROC_BLOCKED || p->wait_kind!=WX_WAIT_IPC ||
+       !message)return 0;
+    p->thread.frame.regs[0]=message;
+    p->state=WX_PROC_READY;
+    p->wait_kind=WX_WAIT_NONE;
+    p->next_ready_tick=timer_ticks;
+    wx_proc_ipc_wakes++;
+    return 1;
+}
 static void wx_proc_wake_blocked(void){
     for(u32 i=0;i<WX_PROC_CAPACITY;i++){
         wx_managed_process *p=&wx_process_table[i];
         if(p->state==WX_PROC_BLOCKED && timer_ticks>=p->next_ready_tick){
+            if(p->wait_kind==WX_WAIT_IPC){
+                p->thread.frame.regs[0]=0;
+                wx_proc_ipc_timeouts++;
+            }
             p->state=WX_PROC_READY;
+            p->wait_kind=WX_WAIT_NONE;
             wx_proc_wake_count++;
         }
     }
@@ -137,9 +176,56 @@ static void wx_proc_list(void){
         print("PROCESS pid=");number(p->pid);
         print(" name=");print(p->name?p->name:"native-task");
         print(" cpl=3 state=RUNNING cr3=");print_hex((u64)p->space.root);
-        print(" quanta=");number(p->quanta);print("\n");
+        print(" quanta=");number(p->quanta);
+        print(" sched_state=");print(p->state==WX_PROC_BLOCKED?"BLOCKED":
+                                       p->state==WX_PROC_READY?"READY":"RUNNING");
+#ifdef WINUX_TIMER_PREEMPT_PREVIEW
+        print(" tid=");number(p->thread.tid);
+#endif
+        print("\n");
     }
     print("PROCESS_LIST_END\n");
+}
+static void wx_proc_thread_list(void){
+    print("THREAD_LIST_BEGIN\n");
+#ifdef WINUX_TIMER_PREEMPT_PREVIEW
+    for(u32 i=0;i<WX_PROC_CAPACITY;i++){
+        const wx_managed_process *p=&wx_process_table[i];
+        if(!wx_proc_alive(p))continue;
+        print("THREAD tid=");number(p->thread.tid);
+        print(" pid=");number(p->pid);
+        print(" state=");print(p->state==WX_PROC_BLOCKED?"BLOCKED":
+                                 p->state==WX_PROC_READY?"READY":"RUNNING");
+        print(" stack_rsp0=");print_hex((u64)p->thread.kernel_stack+
+                                       sizeof(p->thread.kernel_stack)-16);
+        print("\n");
+        /* Sibling threads are only visible if one was genuinely created.
+         * Do not fabricate them for each service or temporary slot. */
+        if(p->sibling_user_stack){
+            print("THREAD tid=");number(p->sibling.tid);
+            print(" pid=");number(p->pid);
+            print(" state=ALLOCATED stack_rsp0=");
+            print_hex((u64)p->sibling.kernel_stack+sizeof(p->sibling.kernel_stack)-16);
+            print("\n");
+        }
+    }
+#endif
+    print("THREAD_LIST_END\n");
+}
+/* Spawn a second CPL3 thread in the SAME address space. Only the
+ * second user stack is new; code, data, CR3 and handles remain process-owned.
+ * The first thread uses wx_proc_thread thread; the second uses sibling. */
+static int wx_proc_add_sibling(wx_managed_process *p){
+    if(!p || !p->space.root || p->sibling_user_stack || wx_active)return 0;
+    u32 slot=(u32)(((WX_USER_STACK+4096ULL)>>12)&511U);
+    if(slot>=512 || (p->space.pt[slot]&PG_PRESENT))return 0;
+    void *frame=page_alloc();
+    if(!frame)return 0;
+    p->sibling_user_stack=frame;
+    p->space.pt[slot]=(u64)frame|PG_PRESENT|PG_WRITE|PG_USER|PG_NX;
+    p->thread.tid=p->pid*4U;
+    p->sibling.tid=p->pid*4U+1U;
+    return 1;
 }
 static int wx_proc_run(wx_managed_process *p){
     if(!p || p->state!=WX_PROC_READY || wx_active)return 0;
@@ -155,7 +241,16 @@ static int wx_proc_reap(wx_managed_process *p){
        wx_active)return 0;
 #ifdef WINUX_TIMER_PREEMPT_PREVIEW
     /* Never release the CPL3 thread stack/frame while IRQ entry owns it. */
-    if(wx_proc_current_irq==p)return 0;
+    if(wx_proc_current_irq==p ||
+       wx_proc_current_thread==&p->thread ||
+       wx_proc_current_thread==&p->sibling)return 0;
+    if(p->sibling_user_stack){
+        u32 slot=(u32)(((WX_USER_STACK+4096ULL)>>12)&511U);
+        if(!(p->space.pt[slot]&PG_PRESENT))return 0;
+        p->space.pt[slot]=0;
+        if(!page_free(p->sibling_user_stack))return 0;
+        p->sibling_user_stack=0;
+    }
 #endif
     int ok=!obj_close(&p->objects,p->owned_event);
     for(u32 k=0;k<OBJ_SLOTS;k++)if(p->objects.slots[k].kind)ok=0;

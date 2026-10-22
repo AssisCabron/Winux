@@ -3,8 +3,13 @@ from pathlib import Path
 import hashlib,subprocess,json,io,contextlib,argparse
 cli=argparse.ArgumentParser()
 cli.add_argument("--experiment",choices=("proc_space","scheduler","integration","preemption"),default="proc_space")
-EXPERIMENT=cli.parse_args().experiment
+cli.add_argument("--vtd",action="store_true",help="Create separate Intel VT-d-required QEMU preview")
+args=cli.parse_args()
+EXPERIMENT=args.experiment
+VTD=args.vtd
+if VTD and EXPERIMENT!="integration":cli.error("--vtd requires --experiment integration")
 OUT_NAME={"proc_space":"proc-space-preview","scheduler":"scheduler-preview","integration":"foundation-preview","preemption":"preemption-preview"}[EXPERIMENT]
+if VTD:OUT_NAME="vtd-preview"
 ROOT=Path(__file__).resolve().parents[2]
 OUT=ROOT/"build"/OUT_NAME
 OUT.mkdir(exist_ok=True,parents=True)
@@ -21,12 +26,15 @@ if EXPERIMENT in ("scheduler","integration","preemption"):
     # Standalone assembly owns the register and stack switch contract.
     asm=ROOT/"src"/"arch"/"x86_64"/"context_switch.S"
     obj=OUT/"context_switch.obj"
+    # Transient COFF artifact; remove before recompilation to avoid Windows
+    # antivirus/file-sharing conflicts while replacing an existing .obj.
+    if obj.exists():obj.unlink()
     subprocess.run([str(zig),"build-obj","-target","x86_64-uefi","-O","ReleaseSmall",
                     f"-femit-bin={obj}",str(asm)],check=True)
     sources.append(str(obj))
 subprocess.run([str(zig),"build-exe","-target","x86_64-uefi","-O","ReleaseSmall",
  "-fno-stack-check","-fno-stack-protector","-mno-red-zone",f"-femit-bin={efi}",
- "-fstrip",*sources],check=True)
+ "-fstrip",*(["-DWINUX_INTEL_VTD_PREVIEW"] if VTD else []),*sources],check=True)
 pack=ROOT/"experiments"/"packaging"/"make_iso_wrapper_fls_candidate.py"
 text=pack.read_text(encoding="utf8")
 assert text.count("build=ROOT/'build'")==1

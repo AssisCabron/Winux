@@ -66,21 +66,29 @@ __attribute__((naked)) static void wx_user_pf(void) {
 }
 /* Verify the CURRENT CR3 and all four user/supervisor boundaries, not
  * the global kernel root (which would validate the wrong process mapping). */
+/* Validate a bounded user buffer against CURRENT CR3, checking EVERY
+ * page and all four paging levels. No trust in the global kernel root.
+ * A rejected buffer is never dereferenced by syscall code. */
 static int wx_user_readable(u64 addr,u64 size) {
-    if (!size || size>WX_NATIVE_MAX_WRITE || addr<WX_USER_CODE ||
-        size>4096 || addr>WX_USER_CODE+4096-size)return 0;
+    const u64 start=WX_USER_CODE;
+    const u64 end=WX_USER_STACK+8192ULL;
+    if(!size || size>WX_NATIVE_MAX_WRITE || addr<start ||
+       addr>=end || size>end-addr)return 0;
     u64 cr3;
     __asm__ volatile("mov %%cr3,%0":"=r"(cr3));
-    u64 *table=(u64*)(cr3&PG_MASK);
-    const unsigned shifts[]={39,30,21};
-    for(unsigned i=0;i<3;i++){
-        u64 value=table[(addr>>shifts[i])&511];
-        if((value&(PG_PRESENT|PG_USER))!=(PG_PRESENT|PG_USER) ||
-           (value&128ULL))return 0;
-        table=(u64*)(value&PG_MASK);
+    for(u64 va=addr&~4095ULL;va<addr+size;va+=4096){
+        u64 *table=(u64*)(cr3&PG_MASK);
+        const unsigned shifts[]={39,30,21};
+        for(unsigned i=0;i<3;i++){
+            u64 value=table[(va>>shifts[i])&511];
+            if((value&(PG_PRESENT|PG_USER))!=(PG_PRESENT|PG_USER) ||
+               (value&128ULL))return 0;
+            table=(u64*)(value&PG_MASK);
+        }
+        u64 leaf=table[(va>>12)&511];
+        if((leaf&(PG_PRESENT|PG_USER))!=(PG_PRESENT|PG_USER))return 0;
     }
-    u64 leaf=table[(addr>>12)&511];
-    return (leaf&(PG_PRESENT|PG_USER))==(PG_PRESENT|PG_USER);
+    return 1;
 }
 #ifdef WINUX_SERVICE_PREVIEW
 /* Current service identity is set by the existing CPL3 service scheduler,
@@ -88,10 +96,25 @@ static int wx_user_readable(u64 addr,u64 size) {
 static u32 wx_current_service_pid;
 static u64 wx_service_ipc_send(u32 sender_pid,u32 receiver_pid,u64 value);
 static u64 wx_service_ipc_receive(u32 receiver_pid);
+static u64 wx_service_ipc_receive_wait(u32 receiver_pid,int *blocked);
 #endif
 #ifdef WINUX_PROC_MANAGER_PREVIEW
 /* Defined in the one authoritative Process Manager, after this gate. */
 static int wx_proc_request_sleep(u64 ticks);
+#endif
+/* On an actual blocking syscall, store the same continuation frame as
+ * YIELD. The caller cannot run again until the Process Manager wakes it. */
+#ifdef WINUX_USER_SCHED_PREVIEW
+static void wx_native_suspend_frame(u64 *frame){
+    frame[0]=0;
+    for(unsigned i=0;i<15;i++)wx_user_resume_target->regs[i]=frame[i];
+    wx_user_resume_target->rip=frame[15];
+    wx_user_resume_target->rflags=frame[17];
+    wx_user_resume_target->rsp=frame[18];
+    wx_user_yielded=1;
+    wx_exit_requested=1;
+    wx_exit_code=0;
+}
 #endif
 /* Frame saved in order rax, rcx, rdx, rbx, rbp, rsi, rdi, r8 ... r15. */
 __attribute__((used,noinline)) static void wx_sys_dispatch(u64 *frame) {
@@ -106,15 +129,7 @@ __attribute__((used,noinline)) static void wx_sys_dispatch(u64 *frame) {
 #else
         if(number==WX_NATIVE_SLEEP_TICKS){frame[0]=~37ULL;return;}
 #endif
-        /* The guest sees 0 as the return value of yield or sleep when resumed. */
-        frame[0]=0;
-        for(unsigned i=0;i<15;i++)wx_user_resume_target->regs[i]=frame[i];
-        wx_user_resume_target->rip=frame[15];
-        wx_user_resume_target->rflags=frame[17];
-        wx_user_resume_target->rsp=frame[18];
-        wx_user_yielded=1;
-        wx_exit_requested=1;
-        wx_exit_code=0;
+        wx_native_suspend_frame(frame);
         return;
     }
 #endif
@@ -127,6 +142,15 @@ __attribute__((used,noinline)) static void wx_sys_dispatch(u64 *frame) {
         frame[0]=wx_service_ipc_receive(wx_current_service_pid);
         return;
     }
+#ifdef WINUX_USER_SCHED_PREVIEW
+    if(number==WX_NATIVE_IPC_RECEIVE_WAIT && wx_user_resume_target){
+        int blocked=0;
+        u64 value=wx_service_ipc_receive_wait(wx_current_service_pid,&blocked);
+        if(blocked)wx_native_suspend_frame(frame);
+        else frame[0]=value;
+        return;
+    }
+#endif
 #endif
     if (number==WX_NATIVE_CLOCK_TICKS) {
         frame[0]=timer_ticks;
