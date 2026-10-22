@@ -5,18 +5,26 @@ cli=argparse.ArgumentParser()
 cli.add_argument("--experiment",choices=("proc_space","scheduler","integration","preemption"),default="proc_space")
 cli.add_argument("--vtd",action="store_true",help="Create separate Intel VT-d-required QEMU preview")
 cli.add_argument("--user-pe",action="store_true",help="Build USER-PE64 isolated CPL3 loader preview")
+cli.add_argument("--orbis-gui",action="store_true",help="Build experimental native Orbis OS graphical boot/login/desktop preview")
 args=cli.parse_args()
 EXPERIMENT=args.experiment
 VTD=args.vtd
 USER_PE=args.user_pe
-if VTD and USER_PE:cli.error("Use separate hardware and process previews")
-if (VTD or USER_PE) and EXPERIMENT!="integration":cli.error("Experimental preview requires integration")
+ORBIS_GUI=args.orbis_gui
+if sum((VTD,USER_PE,ORBIS_GUI))>1:cli.error("Use separate VT-d, user PE and GUI previews")
+if (VTD or USER_PE or ORBIS_GUI) and EXPERIMENT!="integration":cli.error("Experimental preview requires integration")
 OUT_NAME={"proc_space":"proc-space-preview","scheduler":"scheduler-preview","integration":"foundation-preview","preemption":"preemption-preview"}[EXPERIMENT]
 if VTD:OUT_NAME="vtd-preview"
 if USER_PE:OUT_NAME="user-pe-preview"
+if ORBIS_GUI:OUT_NAME="orbis-gui-preview"
 ROOT=Path(__file__).resolve().parents[2]
 OUT=ROOT/"build"/OUT_NAME
 OUT.mkdir(exist_ok=True,parents=True)
+if ORBIS_GUI:
+    subprocess.run(['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',
+                    str(ROOT/'scripts'/'build'/'generate_orbis_font.ps1')],check=True)
+    subprocess.run(['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',
+                    str(ROOT/'scripts'/'build'/'generate_orbis_rgb888.ps1')],check=True)
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 GOLD={
 "winux-0.38-x64.iso":"700e6a38c0b7dbe312b6012810728af8ecd24a984cd8287e0f644a73f1c343b0",
@@ -36,10 +44,21 @@ if EXPERIMENT in ("scheduler","integration","preemption"):
     subprocess.run([str(zig),"build-obj","-target","x86_64-uefi","-O","ReleaseSmall",
                     f"-femit-bin={obj}",str(asm)],check=True)
     sources.append(str(obj))
+if ORBIS_GUI:
+    wall=OUT/"wallpaper.rgb"
+    assert wall.stat().st_size==1280*800*3
+    asm_src=OUT/"orbis_wallpaper.S"
+    asm_src.write_text('.section .rdata,"dr"\n.global orbis_wall_rgb\norbis_wall_rgb:\n.incbin "'+wall.as_posix()+'"\n',encoding="ascii")
+    wall_obj=OUT/"orbis_wallpaper.obj"
+    if wall_obj.exists():wall_obj.unlink()
+    subprocess.run([str(zig),"build-obj","-target","x86_64-uefi","-O","ReleaseSmall",
+                    f"-femit-bin={wall_obj}",str(asm_src)],check=True)
+    sources.append(str(wall_obj))
 subprocess.run([str(zig),"build-exe","-target","x86_64-uefi","-O","ReleaseSmall",
  "-fno-stack-check","-fno-stack-protector","-mno-red-zone",f"-femit-bin={efi}",
  "-fstrip",*(["-DWINUX_INTEL_VTD_PREVIEW"] if VTD else []),
- *(["-DWINUX_USER_PE_PREVIEW"] if USER_PE else []),*sources],check=True)
+ *(["-DWINUX_USER_PE_PREVIEW"] if USER_PE else []),
+ *(["-DWINUX_ORBIS_GUI_PREVIEW"] if ORBIS_GUI else []),*sources],check=True)
 pack=ROOT/"experiments"/"packaging"/"make_iso_wrapper_fls_candidate.py"
 text=pack.read_text(encoding="utf8")
 assert text.count("build=ROOT/'build'")==1

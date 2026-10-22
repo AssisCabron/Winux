@@ -56,6 +56,31 @@ __attribute__((naked)) static void timer_interrupt(void) {
 }
 
 __attribute__((naked)) static void unused_interrupt(void) { __asm__ volatile("iretq"); }
+#ifdef WINUX_ORBIS_GUI_PREVIEW
+/* IRQ12 AUX input buffer. Never paint the framebuffer inside the ISR.
+ * One CPU / bounded 128 byte ring; the UI drains outside IRQ context. */
+static volatile u8 or_ps2_ring[128];
+static volatile u32 or_ps2_rd,or_ps2_wr,or_ps2_irq_count;
+__attribute__((naked)) static void or_ps2_irq12(void){
+    __asm__ volatile(
+        "pushq %%rax\n\tpushq %%rcx\n\tpushq %%rdx\n\t"
+        "movw $0x64, %%dx\n\tinb %%dx, %%al\n\t"
+        "andb $0x21, %%al\n\tcmpb $0x21, %%al\n\tjne 1f\n\t"
+        "movw $0x60, %%dx\n\tinb %%dx, %%al\n\t"
+        "movl or_ps2_wr(%%rip), %%ecx\n\t"
+        "leal 1(%%rcx), %%edx\n\tandl $127, %%edx\n\t"
+        "cmpl or_ps2_rd(%%rip), %%edx\n\tje 1f\n\t"
+        "leaq or_ps2_ring(%%rip), %%rdx\n\t"
+        "movb %%al,(%%rdx,%%rcx,1)\n\t"
+        "incl %%ecx\n\tandl $127, %%ecx\n\t"
+        "movl %%ecx,or_ps2_wr(%%rip)\n\t"
+        "1: movb $0x20, %%al\n\t"
+        "outb %%al,$0xa0\n\toutb %%al,$0x20\n\t"
+        "popq %%rdx\n\tpopq %%rcx\n\tpopq %%rax\n\tiretq"
+        :::"memory");
+}
+#endif
+
 
 static void set_gate(unsigned i, void (*fn)(void), u16 cs) {
     u64 a = (u64) fn;
@@ -82,6 +107,9 @@ static void hardware_init(void) {
     for (unsigned i = 0; i < 256; i++)set_gate(i, unused_interrupt, cs);
     for (unsigned i = 0; i < 32; i++)set_gate(i, exception_handlers[i], cs);
     set_gate(32, timer_interrupt, cs);
+#ifdef WINUX_ORBIS_GUI_PREVIEW
+    set_gate(44, or_ps2_irq12, cs);
+#endif
     idt_pointer pointer = {sizeof(idt) - 1, (u64) idt};
     __asm__ volatile("lidt %0"::"m"(pointer):"memory");
     outb(0x21, 255);

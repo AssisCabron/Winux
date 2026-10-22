@@ -73,7 +73,11 @@ __attribute__((noreturn)) void kernel_main(boot_context *ctx) {
  serial(pool_test()?"[OK] Reserved page allocator self-test\r\n":"[FAIL] Page allocator self-test\r\n");
  print("Winux [version 0.38-P4-test]\n\n");
  serial("KERNEL: BOOT_OK\r\n");
+#ifdef WINUX_ORBIS_GUI_PREVIEW
+ orbis_gui_run();
+#else
  shell();
+#endif
  __builtin_unreachable();
 }
 /* MS x64 ABI: RCX is preserved as boot_context; synthesize entry stack alignment. */

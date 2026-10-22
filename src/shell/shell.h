@@ -211,6 +211,9 @@ static int pe_test(void) {
 #include "../tests/process/isolation_dma_test.h"
 #endif
 
+#ifdef WINUX_ORBIS_GUI_PREVIEW
+#include "../ui/orbis_gui.h"
+#endif
 static void command(char *line, unsigned depth) {
     while (*line == ' ')line++;
     if (!*line || *line == '#')return;
