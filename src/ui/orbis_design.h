@@ -79,33 +79,25 @@ static void or_brand_ring(u32 centerx,u32 centery,u32 size){
     }
 }
 static void or_icon_user(u32 x,u32 y,u32 c){
-    or_disc(x+11,y+8,6,c);or_disc(x+11,y+8,4,ORBIS_SURFACE);
-    or_frame(x+2,y+15,19,13,c);
+    (void)c;or_asset_icon(OR_ICON_USER,x,y,23,25);
 }
 static void or_icon_lock(u32 x,u32 y,u32 c){
-    or_frame(x+4,y+10,16,15,c);
-    or_disc(x+12,y+9,7,c);or_disc(x+12,y+9,5,ORBIS_SURFACE);
-    or_rect(x+11,y+16,2,6,c);
+    (void)c;or_asset_icon(OR_ICON_LOCK,x,y,23,25);
 }
 static void or_icon_monitor(u32 x,u32 y,u32 c){
-    or_frame(x,y,18,12,c);or_rect(x+8,y+12,2,5,c);or_rect(x+4,y+17,10,2,c);
+    (void)c;or_asset_icon(OR_ICON_MONITOR,x,y,20,20);
 }
 static void or_icon_globe(u32 x,u32 y,u32 c){
-    or_disc(x+9,y+9,9,c);or_disc(x+9,y+9,7,ORBIS_GLASS);
-    or_rect(x+8,y,2,18,c);or_rect(x+1,y+8,16,2,c);
+    (void)c;or_asset_icon(OR_ICON_GLOBE,x,y,20,20);
 }
 static void or_icon_keyboard(u32 x,u32 y,u32 c){
-    or_frame(x,y+2,19,13,c);
-    for(u32 row=0;row<2;row++)for(u32 col=0;col<4;col++)or_rect(x+3+col*4,y+5+row*4,2,2,c);
+    (void)c;or_asset_icon(OR_ICON_KEYBOARD,x,y,20,20);
 }
 static void or_icon_clock(u32 x,u32 y,u32 c){
-    or_disc(x+9,y+9,9,c);or_disc(x+9,y+9,7,ORBIS_GLASS);
-    or_rect(x+8,y+4,2,6,c);or_rect(x+9,y+9,5,2,c);
+    (void)c;or_asset_icon(OR_ICON_CLOCK,x,y,20,20);
 }
 static void or_info_bar(u32 x,u32 y,const char *text){
-    or_disc(x+9,y+10,9,ORBIS_LIGHT);
-    or_disc(x+9,y+10,7,0x374250);
-    or_label(x+6,y+1,"i",ORBIS_LIGHT);
+    or_asset_icon(OR_ICON_INFO,x,y,20,20);
     or_label(x+29,y,text,0xd3d8e3);
 }
 static void or_shadow(u32 x,u32 y,u32 w,u32 h){
@@ -126,7 +118,8 @@ static void or_gradient_round(u32 x,u32 y,u32 w,u32 h,u32 top,u32 bottom){
     }
 }
 static void or_field(u32 x,u32 y,u32 w,u32 h,const char *placeholder,int focused,int lock){
-    or_glass(x,y,w,h,0x26354a,188);
+    /* Opaque field surface permits cheap, deterministic partial repaint while typing. */
+    or_glass(x,y,w,h,0x26354a,255);
     or_frame(x,y,w,h,focused?0x557aa7:0x3d4c60);
     if(lock)or_icon_lock(x+14,y+8,focused?0xd8e3f2:0x9ba9bc);
     else or_icon_user(x+14,y+8,focused?0xd8e3f2:0x9ba9bc);
@@ -136,10 +129,6 @@ static void or_primary(u32 x,u32 y,u32 w,const char *s){
     or_gradient_round(x,y,w,44,0x3f91ff,0x1765df);
     u32 t=or_type_width(s,0);
     if(w>t)or_label(x+(w-t)/2-8,y+10,s,0xffffff);
-    or_rect(x+w-43,y+21,17,2,0xffffff);
-    for(u32 i=0;i<6;i++){
-        or_rect(x+w-34+i,y+16+i,2,2,0xffffff);
-        or_rect(x+w-34+i,y+26-i,2,2,0xffffff);
-    }
+    or_asset_icon(OR_ICON_ARROW,x+w-48,y+11,23,23);
 }
 #endif

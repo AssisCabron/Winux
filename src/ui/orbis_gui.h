@@ -6,11 +6,22 @@
 #define WINUX_ORBIS_GUI_H
 #include "../../build/orbis-gui-preview/orbis_font.h"
 extern const unsigned char orbis_wall_rgb[1280U*800U*3U];
+extern const unsigned char orbis_icon_bgra[512U*256U*4U];
+enum {
+    OR_ICON_FILES,OR_ICON_TERMINAL,OR_ICON_APPS,OR_ICON_SETTINGS,
+    OR_ICON_INFO_APP,OR_ICON_ACCOUNT,OR_ICON_BROWSER,OR_ICON_PHOTOS,
+    OR_ICON_DESKTOP,OR_ICON_DOCUMENTS,OR_ICON_PICTURES,OR_ICON_MUSIC,
+    OR_ICON_VIDEOS,OR_ICON_DOWNLOADS,OR_ICON_FOLDER,OR_ICON_BRAND,
+    OR_ICON_MONITOR,OR_ICON_GLOBE,OR_ICON_KEYBOARD,OR_ICON_CLOCK,
+    OR_ICON_USER,OR_ICON_LOCK,OR_ICON_INFO,OR_ICON_ARROW,
+    OR_ICON_HOME,OR_ICON_SEARCH,OR_ICON_POWER,OR_ICON_WIFI,
+    OR_ICON_VOLUME,OR_ICON_BATTERY,OR_ICON_NETWORK,OR_ICON_CLOSE
+};
 enum { OR_SPLASH,OR_SETUP_NAME,OR_SETUP_PIN,OR_LOGIN,OR_DESKTOP,OR_FILES,OR_SETTINGS };
 static u32 or_state,or_name_len,or_pin_len,or_attempts,or_guest;
 static char or_name[24],or_pin[20];
 static u64 or_hash,or_salt,or_lock_until,or_splash_tick;
-static int or_dirty;
+static int or_dirty,or_entry_dirty;
 #define OR_WHITE 0xf7f6f3U
 #define OR_GRAY 0xd3d8dfU
 #define OR_BLUE 0x267debU
@@ -62,23 +73,39 @@ static void or_center(u32 y,const char *s,u32 color){
 static u32 or_sqrt(u32 n){
     u32 a=0;while((a+1)*(a+1)<=n)a++;return a;
 }
+static int or_round_sample(int px,int py,int w,int h,int r){
+    if(px<0||py<0||px>=w||py>=h)return 0;
+    if(px>=r&&px<w-r)return 1;
+    if(py>=r&&py<h-r)return 1;
+    int cx=px<r?r:w-r-1,cy=py<r?r:h-r-1;
+    int dx=px-cx,dy=py-cy;
+    return dx*dx+dy*dy<=r*r;
+}
 static void or_frame(u32 x,u32 y,u32 w,u32 h,u32 c){
-    /* Rounded perimeter in physical pixels, no square retro outlines. */
+    /* One-pixel antialiased rounded perimeter. The same radius used by the
+     * glass fill prevents the small square hook previously visible at corners. */
     u32 x0=or_x(x),y0=or_y(y),x1=or_x(x+w),y1=or_y(y+h);
     if(x1>boot->width)x1=boot->width;if(y1>boot->height)y1=boot->height;
     if(x1<=x0+5||y1<=y0+5)return;
-    u32 radius=or_x(13);
+    u32 radius=or_x(17);
+    if(radius<2)radius=2;
     if(radius>(x1-x0)/2)radius=(x1-x0)/2;
-    for(u32 yy=y0;yy<y1;yy++){
-        u32 dist=yy-y0;
-        if(y1-yy-1<dist)dist=y1-yy-1;
-        u32 inset=dist>=radius?0:radius-or_sqrt(radius*radius-(radius-dist)*(radius-dist));
-        if(inset*2>=x1-x0)continue;
-        if(dist<2)rectangle(x0+inset,yy,x1-x0-2*inset,1,c);
-        else{
-            rectangle(x0+inset,yy,1,1,c);
-            rectangle(x1-inset-1,yy,1,1,c);
+    if(radius>(y1-y0)/2)radius=(y1-y0)/2;
+    int pw=(int)(x1-x0),ph=(int)(y1-y0),r4=(int)radius*4;
+    volatile u32 *fb=(volatile u32*)boot->framebuffer;
+    for(int yy=0;yy<ph;yy++)for(int xx=0;xx<pw;xx++){
+        if(yy>(int)radius+1&&yy<ph-(int)radius-2&&xx>1&&xx<pw-2)continue;
+        if(xx>(int)radius+1&&xx<pw-(int)radius-2&&yy>1&&yy<ph-2)continue;
+        u32 coverage=0;
+        for(int sy=1;sy<=3;sy+=2)for(int sx=1;sx<=3;sx+=2){
+            int qx=xx*4+sx,qy=yy*4+sy;
+            int outer=or_round_sample(qx,qy,pw*4,ph*4,r4);
+            int inner=or_round_sample(qx-4,qy-4,(pw-2)*4,(ph-2)*4,r4-4);
+            coverage+=(u32)(outer&&!inner);
         }
+        if(!coverage)continue;
+        u64 at=(u64)(y0+(u32)yy)*boot->stride+x0+(u32)xx;
+        fb[at]=rgb(or_font_mix(rgb(fb[at]),c,coverage*255U/4U));
     }
 }
 static void or_disc(u32 x,u32 y,u32 r,u32 c){
@@ -185,36 +212,32 @@ static void or_frost(u32 x,u32 y,u32 w,u32 h){
             if(or_round_hit(xx,yy,x0,y0,x1,y1,r))fb[(u64)yy*boot->stride+xx]=rgb(avg);
     }
 }
+static void or_asset_icon(u32 id,u32 x,u32 y,u32 w,u32 h){
+    if(!graphics_ready||id>=32||!w||!h)return;
+    u32 x0=or_x(x),y0=or_y(y),x1=or_x(x+w),y1=or_y(y+h);
+    if(x1>boot->width)x1=boot->width;if(y1>boot->height)y1=boot->height;
+    if(x1<=x0||y1<=y0)return;
+    u32 local=id<16?id:id-16;
+    u32 source_x=(id<16?0U:256U)+(local%4U)*64U;
+    u32 source_y=(local/4U)*64U;
+    volatile u32 *fb=(volatile u32*)boot->framebuffer;
+    for(u32 py=y0;py<y1;py++)for(u32 px=x0;px<x1;px++){
+        u32 sx=source_x+(u32)((u64)(px-x0)*64U/(x1-x0));
+        u32 sy=source_y+(u32)((u64)(py-y0)*64U/(y1-y0));
+        if(sx>=source_x+64)sx=source_x+63;
+        if(sy>=source_y+64)sy=source_y+63;
+        const unsigned char *p=&orbis_icon_bgra[((u64)sy*512U+sx)*4U];
+        u32 alpha=p[3];if(!alpha)continue;
+        u32 color=((u32)p[2]<<16)|((u32)p[1]<<8)|p[0];
+        u64 at=(u64)py*boot->stride+px;
+        fb[at]=rgb(or_font_mix(rgb(fb[at]),color,alpha));
+    }
+}
 #include "orbis_design.h"
 static void or_app_icon(u32 x,u32 y,u32 k){
-    static const u32 colors[6]={0x277fda,0x111c2a,0x7154d4,0x495462,0x159c90,0x596a91};
-    or_glass(x,y,73,61,colors[k],226);
-    or_frame(x,y,73,61,0x526278);
-    if(k==0){ /* file folder */
-        or_rect(x+12,y+16,47,32,0xe0edff);
-        or_rect(x+12,y+12,19,9,0xf4f8ff);
-        or_rect(x+15,y+21,42,3,0xb5d6ff);
-    }else if(k==1){ /* console */
-        or_label(x+17,y+17,">_",OR_WHITE);
-    }else if(k==2){ /* applications grid */
-        or_rect(x+17,y+14,14,14,0xf0aebd);
-        or_rect(x+38,y+14,14,14,0x96c6fe);
-        or_rect(x+17,y+35,14,14,0xb6f1cb);
-        or_rect(x+38,y+35,14,14,0xf9d87e);
-    }else if(k==3){ /* settings control */
-        or_disc(x+36,y+30,19,0xd6dee9);
-        or_disc(x+36,y+30,12,0x495462);
-        or_disc(x+36,y+30,5,0xd6dee9);
-        or_rect(x+32,y+5,8,12,0xd6dee9);
-        or_rect(x+32,y+44,8,11,0xd6dee9);
-    }else if(k==4){ /* information */
-        or_disc(x+36,y+30,20,0xe7f7f2);
-        or_label(x+33,y+15,"i",0x159c90);
-    }else{ /* user */
-        or_disc(x+36,y+21,11,0xf1f1fb);
-        or_disc(x+36,y+48,21,0xced9f1);
-        or_disc(x+36,y+21,10,0xf1f1fb);
-    }
+    static const u32 icons[6]={OR_ICON_FILES,OR_ICON_TERMINAL,OR_ICON_APPS,
+                               OR_ICON_SETTINGS,OR_ICON_INFO_APP,OR_ICON_ACCOUNT};
+    if(k<6)or_asset_icon(icons[k],x+5,y,63,63);
 }
 static void or_logo(u32 y){
     or_disc(477,y+9,24,0x202e3b);
@@ -311,19 +334,8 @@ static void or_login_screen(void){
     if(timer_ticks<or_lock_until)or_label(600,566,"Temporarily locked",0xffb7a7);
 }
 static void or_small_dock_icon(u32 x,u32 k){
-    static const u32 colors[4]={0x1b79d2,0x1e2431,0x4d7e91,0x5a616d};
-    or_glass(x,682,37,33,colors[k],220);
-    if(k==0){
-        or_rect(x+8,695,23,13,0xc3e9ff);
-        or_rect(x+8,692,10,7,0xe5f7ff);
-    }else if(k==1){or_label(x+10,687,">_",OR_WHITE);}
-    else if(k==2){
-        or_rect(x+9,690,9,9,0xfba5b0);or_rect(x+20,690,9,9,0x8ecbff);
-        or_rect(x+9,701,9,9,0xbef3be);or_rect(x+20,701,9,9,0xf8d382);
-    }else{
-        or_disc(x+18,698,10,0xf2f6fa);
-        or_disc(x+18,698,5,0x5a616d);
-    }
+    static const u32 icons[4]={OR_ICON_FILES,OR_ICON_TERMINAL,OR_ICON_APPS,OR_ICON_SETTINGS};
+    if(k<4)or_asset_icon(icons[k],x+1,681,35,35);
 }
 static void or_bar(void){
     /* Floating dock instead of a full-width taskbar. */
@@ -331,15 +343,14 @@ static void or_bar(void){
     or_frost(390,671,500,45);
     or_glass(390,671,500,45,0x101722,174);
     or_frame(390,671,500,45,0x46556a);
-    or_brand_ring(423,693,13);
+    or_asset_icon(OR_ICON_BRAND,407,677,32,32);
     or_rect(454,681,1,25,0x526176);
     for(u32 i=0;i<4;i++)or_small_dock_icon(565+i*47,i);
     or_rect(767,681,1,25,0x526176);
     or_label(793,683,"PREVIEW",OR_GRAY);
 }
 static void or_desktop_screen(void){
-    or_glass(49,36,64,50,0xdbae4a,232);
-    or_rect(62,55,40,24,0xf4c457);or_rect(62,48,17,11,0xffdd85);
+    or_asset_icon(OR_ICON_DESKTOP,49,31,64,64);
     or_label(53,99,"Home",OR_WHITE);
     or_bar();
     or_shadow(72,184,336,421);
@@ -372,14 +383,11 @@ static void or_desktop_screen(void){
         or_label(480,336,"Downloads",OR_GRAY);or_label(480,375,"Pictures",OR_GRAY);
         or_rect(630,242,1,335,OR_EDGE);
         static const char *names[6]={"Desktop","Documents","Pictures","Music","Videos","Downloads"};
-        static const u32 tones[6]={0x277bd7,0x6d849c,0x4d7fb4,0xb45075,0x704ec8,0x2fae91};
+        static const u32 icons[6]={OR_ICON_DESKTOP,OR_ICON_DOCUMENTS,OR_ICON_PICTURES,
+                                   OR_ICON_MUSIC,OR_ICON_VIDEOS,OR_ICON_DOWNLOADS};
         for(u32 k=0;k<6;k++){
             u32 x=658+(k%3)*180,y=253+(k/3)*149;
-            or_glass(x,y,111,83,tones[k],211);or_frame(x,y,111,83,0x526278);
-            or_rect(x+24,y+22,65,41,0xd8e7fa);
-            or_rect(x+24,y+15,25,16,0xecf2ff);
-            if(k==2)or_disc(x+57,y+43,10,0x7fb8ed);
-            if(k==4)or_label(x+51,y+28,">",0x5474aa);
+            or_asset_icon(icons[k],x+17,y+2,78,78);
             or_label(x,y+89,names[k],OR_WHITE);
         }
         or_label(651,568,"Sample folders - live FAT16 browsing follows",OR_GRAY);
@@ -401,11 +409,23 @@ static void or_desktop_screen(void){
         or_label(503,468,"Keyboard input | GOP framebuffer",OR_GRAY);
     }
 }
+static void or_redraw_entry(void){
+    or_entry_dirty=0;
+    if(or_state==OR_SETUP_NAME||or_state==OR_SETUP_PIN){
+        or_field(405,436,462,44,or_state==OR_SETUP_NAME&&!or_name_len?
+                 "Enter your display name...":0,1,or_state==OR_SETUP_PIN);
+        if(or_state==OR_SETUP_NAME)or_label(456,447,or_name,OR_WHITE);
+        else or_mask(468,460);
+    }else if(or_state==OR_LOGIN){
+        or_field(415,405,450,49,or_pin_len?0:"Enter your demo PIN...",1,1);
+        if(or_pin_len)or_mask(520,429);
+    }
+}
 static int or_mouse_available,or_mouse_saved_valid;
 static void or_mouse_draw(void);
 static void or_draw(void){
     or_mouse_saved_valid=0;
-    or_dirty=0;
+    or_dirty=0;or_entry_dirty=0;
     if(!graphics_ready)return;
     or_wallpaper();
     if(or_state==OR_SPLASH)or_splash_screen();
@@ -432,17 +452,21 @@ static void or_goto(u32 target,const char *log){
 static void or_input(int ch){
     if(or_state==OR_SPLASH)return;
     if(or_state==OR_SETUP_NAME){
-        if(ch==8){if(or_name_len)or_name[--or_name_len]=0;}
+        int edited=0;
+        if(ch==8){if(or_name_len){or_name[--or_name_len]=0;edited=1;}}
         else if(ch=='\n'||ch=='\r'){
-            if(or_name_len>=2)or_goto(OR_SETUP_PIN,"ORBIS_SETUP_PIN_READY\r\n");
+            if(or_name_len>=2){or_goto(OR_SETUP_PIN,"ORBIS_SETUP_PIN_READY\r\n");return;}
         }else if(ch>=32&&ch<=126&&or_name_len<20){
-            or_name[or_name_len++]=(char)ch;or_name[or_name_len]=0;
+            or_name[or_name_len++]=(char)ch;or_name[or_name_len]=0;edited=1;
         }
-        or_dirty=1;return;
+        if(edited)or_entry_dirty=1;
+        return;
     }
     if(or_state==OR_SETUP_PIN||or_state==OR_LOGIN){
-        if(ch==8){if(or_pin_len)or_pin[--or_pin_len]=0;}
+        int edited=0,submitted=0;
+        if(ch==8){if(or_pin_len){or_pin[--or_pin_len]=0;edited=1;}}
         else if(ch=='\n'||ch=='\r'){
+            submitted=1;
             if(or_state==OR_SETUP_PIN&&or_pin_len>=4){
                 or_salt=(timer_ticks<<32)^((u64)boot->framebuffer<<9)^0x8f376ab21987ULL;
                 or_hash=or_demo_hash(or_pin,or_pin_len);
@@ -469,8 +493,10 @@ static void or_input(int ch){
             or_guest=1;
             or_goto(OR_DESKTOP,"ORBIS_DESKTOP_READY user=guest\r\n");return;
         }else if(ch>=32&&ch<=126&&or_pin_len<16)
-            or_pin[or_pin_len++]=(char)ch;
-        or_dirty=1;return;
+            {or_pin[or_pin_len++]=(char)ch;edited=1;}
+        if(submitted)or_dirty=1;
+        else if(edited)or_entry_dirty=1;
+        return;
     }
     if(ch=='l'||ch=='L'){
         or_pin_clear();
@@ -658,6 +684,11 @@ __attribute__((noreturn)) static void orbis_gui_run(void){
             or_goto(OR_SETUP_NAME,"ORBIS_SETUP_READY\r\n");
         if(c)or_input(c);
         if(or_dirty)or_draw();
+        else if(or_entry_dirty){
+            or_mouse_restore();
+            or_redraw_entry();
+            or_mouse_draw();
+        }
         /* Recheck the ring with interrupts masked, then enable+sleep as one
          * sequence. This drains queued packets immediately and closes the
          * lost-wakeup window between the empty test and HLT. */

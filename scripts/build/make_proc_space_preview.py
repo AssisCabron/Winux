@@ -25,6 +25,8 @@ if ORBIS_GUI:
                     str(ROOT/'scripts'/'build'/'generate_orbis_font.ps1')],check=True)
     subprocess.run(['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',
                     str(ROOT/'scripts'/'build'/'generate_orbis_rgb888.ps1')],check=True)
+    subprocess.run(['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',
+                    str(ROOT/'scripts'/'build'/'generate_orbis_icons.ps1')],check=True)
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 GOLD={
 "winux-0.38-x64.iso":"700e6a38c0b7dbe312b6012810728af8ecd24a984cd8287e0f644a73f1c343b0",
@@ -54,6 +56,15 @@ if ORBIS_GUI:
     subprocess.run([str(zig),"build-obj","-target","x86_64-uefi","-O","ReleaseSmall",
                     f"-femit-bin={wall_obj}",str(asm_src)],check=True)
     sources.append(str(wall_obj))
+    icons=OUT/"orbis-icons-atlas.bgra"
+    assert icons.stat().st_size==512*256*4
+    icons_asm=OUT/"orbis_icons.S"
+    icons_asm.write_text('# atlas-sha256 '+sha(icons)+'\n.section .rdata,"dr"\n.global orbis_icon_bgra\norbis_icon_bgra:\n.incbin "'+icons.as_posix()+'"\n',encoding="ascii")
+    icons_obj=OUT/"orbis_icons.obj"
+    if icons_obj.exists():icons_obj.unlink()
+    subprocess.run([str(zig),"build-obj","-target","x86_64-uefi","-O","ReleaseSmall",
+                    f"-femit-bin={icons_obj}",str(icons_asm)],check=True)
+    sources.append(str(icons_obj))
 subprocess.run([str(zig),"build-exe","-target","x86_64-uefi","-O","ReleaseSmall",
  "-fno-stack-check","-fno-stack-protector","-mno-red-zone",f"-femit-bin={efi}",
  "-fstrip",*(["-DWINUX_INTEL_VTD_PREVIEW"] if VTD else []),
