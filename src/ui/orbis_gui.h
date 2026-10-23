@@ -33,10 +33,10 @@ static void or_font_glyph(u32 x,u32 y,u32 ch,u32 fg){
     if(!graphics_ready)return;
     volatile u32 *fb=(volatile u32*)boot->framebuffer;
     const u8 *coverage=orbis_font_8bpp[ch-32];
-    for(u32 yy=0;yy<28;yy++)for(u32 xx=0;xx<24;xx++){
+    for(u32 yy=0;yy<ORBIS_BODY_H;yy++)for(u32 xx=0;xx<ORBIS_BODY_W;xx++){
         u32 u=x+xx,v=y+yy;
         if(u>=boot->width||v>=boot->height)continue;
-        u32 offset=yy*24+xx;
+        u32 offset=yy*ORBIS_BODY_W+xx;
         u32 alpha=coverage[offset];
         if(!alpha)continue;
         u64 index=(u64)v*boot->stride+u;
@@ -45,7 +45,7 @@ static void or_font_glyph(u32 x,u32 y,u32 ch,u32 fg){
 }
 static void or_label(u32 x,u32 y,const char *s,u32 c){
     u32 px=or_x(x),py=or_y(y);
-    while(*s && px+24<boot->width){
+    while(*s && px+ORBIS_BODY_W<boot->width){
         u8 ch=(u8)*s++;or_font_glyph(px,py,ch,c);
         px+=orbis_font_advance[ch>=32&&ch<=126?ch-32:31];
     }
@@ -54,7 +54,7 @@ static void or_center(u32 y,const char *s,u32 color){
     u32 n=0,w=0;
     while(s[n] && n<100){u8 ch=(u8)s[n++];w+=orbis_font_advance[ch>=32&&ch<=126?ch-32:31];}
     u32 x=boot->width>w?(boot->width-w)/2:0;
-    while(*s&&x+24<boot->width){
+    while(*s&&x+ORBIS_BODY_W<boot->width){
         u8 ch=(u8)*s++;or_font_glyph(x,or_y(y),ch,color);
         x+=orbis_font_advance[ch>=32&&ch<=126?ch-32:31];
     }
@@ -116,6 +116,15 @@ static void or_wallpaper(void){
             u64 at=((u64)sy*1280U+sx)*3U;
             u32 color=((u32)orbis_wall_rgb[at]<<16)|
                       ((u32)orbis_wall_rgb[at+1]<<8)|orbis_wall_rgb[at+2];
+            /* Art-directed backdrop treatment: a calm dark falloff behind
+             * the brand plus a subtle lower vignette. This replaces the
+             * untouched stock-photo appearance without baking UI into it. */
+            u32 shade=0;
+            if(x*1280U<boot->width*500U)
+                shade=(500U-(u32)((u64)x*1280U/boot->width))*76U/500U;
+            shade+=(u32)((u64)y*34U/boot->height);
+            if(shade>104)shade=104;
+            color=or_blend(color,0x09131f,shade);
             fb[(u64)y*boot->stride+x]=rgb(color);
         }
     }
@@ -130,21 +139,57 @@ static void or_glass(u32 x,u32 y,u32 w,u32 h,u32 tint,u32 alpha){
     if(y1>boot->height)y1=boot->height;
     if(alpha>255)alpha=255;
     volatile u32 *fb=(volatile u32*)boot->framebuffer;
+    u32 radius=or_x(17);
+    if(radius<2)radius=2;
+    if(radius>(x1-x0)/2)radius=(x1-x0)/2;
+    if(radius>(y1-y0)/2)radius=(y1-y0)/2;
     for(u32 yy=y0;yy<y1;yy++){
         u32 inset=0,dist=yy-y0;
         if(y1-yy-1<dist)dist=y1-yy-1;
-        if(dist<10)inset=(10-dist)*(10-dist)/12;
+        if(dist<radius){
+            u32 v=radius-dist;
+            inset=radius-or_sqrt(radius*radius-v*v);
+        }
         for(u32 xx=x0+inset;xx+inset<x1;xx++){
             u64 index=(u64)yy*boot->stride+xx;
             fb[index]=rgb(or_blend(rgb(fb[index]),tint,alpha));
         }
     }
 }
+static int or_round_hit(u32 x,u32 y,u32 x0,u32 y0,u32 x1,u32 y1,u32 r){
+    if(x<x0||y<y0||x>=x1||y>=y1)return 0;
+    if((x>=x0+r&&x+r<x1)||(y>=y0+r&&y+r<y1))return 1;
+    u32 cx=x<x0+r?x0+r:x1-r-1,cy=y<y0+r?y0+r:y1-r-1;
+    int dx=(int)x-(int)cx,dy=(int)y-(int)cy;
+    return (u32)(dx*dx+dy*dy)<=r*r;
+}
+static void or_frost(u32 x,u32 y,u32 w,u32 h){
+    /* Small block-filtered backdrop blur. It only runs inside glass cards;
+     * controls remain crisp and the wallpaper is restored before each frame. */
+    u32 x0=or_x(x),y0=or_y(y),x1=or_x(x+w),y1=or_y(y+h),r=or_x(18);
+    if(x1>boot->width)x1=boot->width;if(y1>boot->height)y1=boot->height;
+    volatile u32 *fb=(volatile u32*)boot->framebuffer;
+    for(u32 by=y0;by<y1;by+=2)for(u32 bx=x0;bx<x1;bx+=2){
+        u32 cx=bx+1,cy=by+1;if(cx>=x1)cx=bx;if(cy>=y1)cy=by;
+        if(!or_round_hit(cx,cy,x0,y0,x1,y1,r))continue;
+        u32 sr=0,sg=0,sb=0,count=0;
+        for(int oy=-3;oy<=3;oy+=3)for(int ox=-3;ox<=3;ox+=3){
+            int sx=(int)cx+ox,sy=(int)cy+oy;
+            if(sx<0||sy<0||(u32)sx>=boot->width||(u32)sy>=boot->height)continue;
+            u32 c=rgb(fb[(u64)(u32)sy*boot->stride+(u32)sx]);
+            sr+=(c>>16)&255;sg+=(c>>8)&255;sb+=c&255;count++;
+        }
+        if(!count)continue;
+        u32 avg=((sr/count)<<16)|((sg/count)<<8)|(sb/count);
+        for(u32 yy=by;yy<by+2&&yy<y1;yy++)for(u32 xx=bx;xx<bx+2&&xx<x1;xx++)
+            if(or_round_hit(xx,yy,x0,y0,x1,y1,r))fb[(u64)yy*boot->stride+xx]=rgb(avg);
+    }
+}
 #include "orbis_design.h"
 static void or_app_icon(u32 x,u32 y,u32 k){
     static const u32 colors[6]={0x277fda,0x111c2a,0x7154d4,0x495462,0x159c90,0x596a91};
-    or_glass(x,y,73,61,colors[k],234);
-    or_frame(x,y,73,61,0x98a5b6);
+    or_glass(x,y,73,61,colors[k],226);
+    or_frame(x,y,73,61,0x526278);
     if(k==0){ /* file folder */
         or_rect(x+12,y+16,47,32,0xe0edff);
         or_rect(x+12,y+12,19,9,0xf4f8ff);
@@ -192,7 +237,9 @@ static void or_panel(u32 y,const char *heading){
     or_center(y+27,heading,OR_WHITE);
 }
 static void or_splash_screen(void){
-    or_glass(369,236,545,252,ORBIS_GLASS,96);
+    or_shadow(369,236,545,252);
+    or_frost(369,236,545,252);
+    or_glass(369,236,545,252,ORBIS_GLASS,112);
     or_brand_ring(558,332,36);
     or_text_display_at(or_x(613),or_y(307),"ORBIS OS",OR_WHITE);
     or_body_center(387,"Starting ORBIS OS",OR_WHITE);
@@ -205,43 +252,59 @@ static void or_setup_screen(void){
     /* Modern first-boot card with typographic hierarchy and warm brand. */
     or_brand_ring(91,162,30);
     or_text_display_at(or_x(134),or_y(134),"ORBIS OS",OR_WHITE);
-    or_label(54,207,"A BRIGHTER TOMORROW",ORBIS_LIGHT);
+    or_label(54,205,"A  B R I G H T E R",ORBIS_LIGHT);
+    or_label(54,232,"C O M P U T I N G   T O M O R R O W",ORBIS_LIGHT);
     or_rect(54,328,46,3,ORBIS_ACCENT);
     or_label(54,350,"Modern. Focused. Human.",OR_WHITE);
-    or_label(54,390,"Clarity, productivity and a",OR_GRAY);
-    or_label(54,420,"more beautiful digital life.",OR_GRAY);
-    or_glass(349,131,583,486,0x071324,88);
-    or_glass(355,123,570,483,ORBIS_GLASS,197);
-    or_frame(355,123,570,483,0x8b8795);
+    or_label(54,390,"ORBIS OS is a modern operating",OR_GRAY);
+    or_label(54,417,"system designed for clarity,",OR_GRAY);
+    or_label(54,444,"productivity and a more",OR_GRAY);
+    or_label(54,471,"beautiful digital life.",OR_GRAY);
+    or_label(1038,151,"S A M E   W O R L D .",0x39414a);
+    or_label(1038,181,"A  B R I G H T E R",0x39414a);
+    or_label(1038,208,"P E R S P E C T I V E .",0x39414a);
+    or_rect(1038,240,37,3,ORBIS_ACCENT);
+    or_shadow(355,123,570,483);
+    or_frost(355,123,570,483);
+    or_glass(355,123,570,483,ORBIS_GLASS,139);
+    or_frame(355,123,570,483,0x56657a);
     or_brand_ring(640,167,23);
     or_heading_center(208,"Welcome to ORBIS OS",OR_WHITE);
-    or_body_center(261,"A more open tomorrow.",ORBIS_LIGHT);
-    or_label(399,295,"First boot  -  local preview setup",OR_WHITE);
-    or_label(399,324,"Region: Brazil      Language: English",OR_GRAY);
-    or_label(399,351,"Keyboard: US       Timezone: not configured",OR_GRAY);
-    or_rect(397,382,480,1,0x7a7582);
-    or_label(401,391,or_state==OR_SETUP_NAME?
+    or_icon_monitor(399,294,OR_WHITE);
+    or_label(430,291,"First boot - local preview setup",OR_WHITE);
+    or_icon_globe(399,329,OR_WHITE);
+    or_label(430,326,"Region: Brazil",OR_GRAY);
+    or_rect(542,328,1,21,0x7a7582);
+    or_label(570,326,"Language: English",OR_GRAY);
+    or_icon_keyboard(399,361,OR_WHITE);
+    or_label(430,358,"Keyboard: US",OR_GRAY);
+    or_rect(542,360,1,21,0x7a7582);
+    or_icon_clock(568,359,OR_WHITE);
+    or_label(598,358,"Timezone: not configured",OR_GRAY);
+    or_rect(397,391,480,1,0x7a7582);
+    or_label(401,405,or_state==OR_SETUP_NAME?
        "Step 1: Display name":"Step 2: Demo PIN (4-16 chars)",OR_WHITE);
-    or_field(405,420,462,44,or_state==OR_SETUP_NAME&&!or_name_len?
-             "Enter your display name...":0,1);
-    if(or_state==OR_SETUP_NAME)or_label(426,430,or_name,OR_WHITE);
-    else or_mask(435,444);
-    or_primary(405,475,462,"Continue >");
-    or_info_bar(405,546,"Volatile account. Not a secure login yet.");
+    or_field(405,436,462,44,or_state==OR_SETUP_NAME&&!or_name_len?
+             "Enter your display name...":0,1,or_state==OR_SETUP_PIN);
+    if(or_state==OR_SETUP_NAME)or_label(456,447,or_name,OR_WHITE);
+    else or_mask(468,460);
+    or_primary(405,494,462,"Continue");
+    or_info_bar(453,557,"Volatile account. Not a secure login yet.");
 }
 static void or_login_screen(void){
-    or_glass(349,154,583,444,0x081522,90);
-    or_glass(355,145,570,442,ORBIS_GLASS,202);
-    or_frame(355,145,570,442,0x8b8795);
+    or_shadow(355,145,570,442);
+    or_frost(355,145,570,442);
+    or_glass(355,145,570,442,ORBIS_GLASS,146);
+    or_frame(355,145,570,442,0x56657a);
     or_brand_ring(640,188,26);
     or_heading_center(232,"Sign in to ORBIS OS",OR_WHITE);
     or_disc(640,325,37,0x8394b5);
     or_disc(640,313,14,0xe7edf8);
     or_disc(640,344,21,0xd9e5f5);
     or_body_center(367,or_name[0]?or_name:"Local user",OR_WHITE);
-    or_field(415,405,450,49,or_pin_len?0:"Enter your demo PIN...",1);
+    or_field(415,405,450,49,or_pin_len?0:"Enter your demo PIN...",1,1);
     if(or_pin_len)or_mask(520,429);
-    or_primary(415,475,450,"Sign In >");
+    or_primary(415,475,450,"Sign In");
     or_label(438,545,"G: Guest session",ORBIS_LIGHT);
     or_label(675,545,"Enter: Sign in",OR_GRAY);
     if(or_attempts)or_label(436,566,"Incorrect PIN",0xffb7a7);
@@ -249,8 +312,7 @@ static void or_login_screen(void){
 }
 static void or_small_dock_icon(u32 x,u32 k){
     static const u32 colors[4]={0x1b79d2,0x1e2431,0x4d7e91,0x5a616d};
-    or_glass(x,682,37,33,colors[k],237);
-    or_frame(x,682,37,33,0x718399);
+    or_glass(x,682,37,33,colors[k],220);
     if(k==0){
         or_rect(x+8,695,23,13,0xc3e9ff);
         or_rect(x+8,692,10,7,0xe5f7ff);
@@ -264,26 +326,28 @@ static void or_small_dock_icon(u32 x,u32 k){
     }
 }
 static void or_bar(void){
-    or_glass(0,676,1280,44,0x10161d,218);
-    or_disc(30,697,13,0xf4f1e9);or_disc(30,697,7,0x34434e);
-    or_label(59,689,"ORBIS OS",OR_WHITE);
-    or_rect(172,688,1,27,0x637385);
-    or_glass(190,683,278,33,0x353e4a,202);
-    or_frame(190,683,278,33,0x6a7686);
-    or_label(214,689,"Search...",OR_GRAY);
-    for(u32 i=0;i<4;i++)or_small_dock_icon(588+i*45,i);
-    or_label(1063,689,"PREVIEW",OR_GRAY);
+    /* Floating dock instead of a full-width taskbar. */
+    or_shadow(390,671,500,45);
+    or_frost(390,671,500,45);
+    or_glass(390,671,500,45,0x101722,174);
+    or_frame(390,671,500,45,0x46556a);
+    or_brand_ring(423,693,13);
+    or_rect(454,681,1,25,0x526176);
+    for(u32 i=0;i<4;i++)or_small_dock_icon(565+i*47,i);
+    or_rect(767,681,1,25,0x526176);
+    or_label(793,683,"PREVIEW",OR_GRAY);
 }
 static void or_desktop_screen(void){
-    or_glass(49,36,64,50,0xdbae4a,241);or_frame(49,36,64,50,0xf7d17a);
+    or_glass(49,36,64,50,0xdbae4a,232);
     or_rect(62,55,40,24,0xf4c457);or_rect(62,48,17,11,0xffdd85);
     or_label(53,99,"Home",OR_WHITE);
     or_bar();
-    or_glass(68,189,343,421,0x090f16,100);
-    or_glass(72,184,336,421,OR_PANEL,219);
-    or_frame(72,184,336,421,OR_EDGE);
+    or_shadow(72,184,336,421);
+    or_frost(72,184,336,421);
+    or_glass(72,184,336,421,OR_PANEL,151);
+    or_frame(72,184,336,421,0x46556a);
     or_label(91,203,"ORBIS APPS",OR_WHITE);
-    or_glass(91,234,300,33,0x394451,217);or_frame(91,234,300,33,0x637183);
+    or_glass(91,234,300,33,0x394451,174);
     or_label(106,238,"Search apps...",OR_GRAY);
     for(u32 k=0;k<6;k++){
         u32 x=101+(k%3)*99,y=304+(k/3)*102;
@@ -293,14 +357,14 @@ static void or_desktop_screen(void){
     }
     or_label(92,525,or_guest?"GUEST DEMO SESSION":or_name,OR_WHITE);
     or_label(92,568,"F files  S settings  L logout",OR_GRAY);
-    or_glass(461,183,765,432,0x060a11,110);
-    or_glass(457,174,764,432,OR_DARK,238);
-    or_frame(457,174,764,432,OR_EDGE);
-    or_glass(457,174,764,47,0x141c26,248);
+    or_shadow(457,174,764,432);
+    or_frost(457,174,764,432);
+    or_glass(457,174,764,432,OR_DARK,171);
+    or_frame(457,174,764,432,0x46556a);
+    or_glass(457,174,764,47,0x111b29,218);
     or_disc(482,197,6,0xec6b70);or_disc(502,197,6,0xe9ba5e);
     or_disc(522,197,6,0x67c98a);
-    or_glass(854,180,299,33,0x354151,166);
-    or_frame(854,180,299,33,0x566474);
+    or_glass(854,180,299,33,0x354151,152);
     or_label(871,184,or_state==OR_FILES?"Search files...":"Search settings...",OR_GRAY);
     if(or_state==OR_FILES){
         or_label(551,187,"Files | Home",OR_WHITE);
@@ -311,7 +375,7 @@ static void or_desktop_screen(void){
         static const u32 tones[6]={0x277bd7,0x6d849c,0x4d7fb4,0xb45075,0x704ec8,0x2fae91};
         for(u32 k=0;k<6;k++){
             u32 x=658+(k%3)*180,y=253+(k/3)*149;
-            or_glass(x,y,111,83,tones[k],222);or_frame(x,y,111,83,0x8895a6);
+            or_glass(x,y,111,83,tones[k],211);or_frame(x,y,111,83,0x526278);
             or_rect(x+24,y+22,65,41,0xd8e7fa);
             or_rect(x+24,y+15,25,16,0xecf2ff);
             if(k==2)or_disc(x+57,y+43,10,0x7fb8ed);
@@ -427,34 +491,43 @@ static void or_status(const char *cmd){
         serial(graphics_ready?"ready\r\n":"missing\r\n");
     }
 }
-/* Minimal polled i8042/PS2 mouse driver for GUI-only QEMU builds.
+/* Minimal IRQ12 i8042/PS2 mouse driver for GUI-only QEMU builds.
  * Cursor is saved/restored directly from the GOP framebuffer.
  * No interrupts, USB, touchpad gestures, multitouch or device hotplug.
  */
+#define OR_CURSOR_W 16
+#define OR_CURSOR_H 22
 static u32 or_mouse_x,or_mouse_y,or_mouse_count;
 static u8 or_mouse_packet[3],or_mouse_buttons;
-static u32 or_mouse_under[11*17];
+static u32 or_mouse_under[OR_CURSOR_W*OR_CURSOR_H];
+static const char or_cursor_shape[OR_CURSOR_H][OR_CURSOR_W+1]={
+    "X", "XX", "XWX", "XWWX", "XWWWX", "XWWWWX",
+    "XWWWWWX", "XWWWWWWX", "XWWWWWWWX", "XWWWWWWWWX",
+    "XWWWWWWWWWX", "XWWWWWXXXXXX", "XWWWX", "XWWXWX",
+    "XWX XWX", "XX  XWX", "X    XWX", "     XWX",
+    "      XWX", "      XWX", "       XX", ""
+};
 static void or_mouse_restore(void){
     if(!or_mouse_saved_valid)return;
     volatile u32 *fb=(volatile u32*)boot->framebuffer;
-    for(u32 dy=0;dy<17;dy++)for(u32 dx=0;dx<11;dx++){
+    for(u32 dy=0;dy<OR_CURSOR_H;dy++)for(u32 dx=0;dx<OR_CURSOR_W;dx++){
         u32 x=or_mouse_x+dx,y=or_mouse_y+dy;
         if(x<boot->width && y<boot->height)
-            fb[(u64)y*boot->stride+x]=or_mouse_under[dy*11+dx];
+            fb[(u64)y*boot->stride+x]=or_mouse_under[dy*OR_CURSOR_W+dx];
     }
     or_mouse_saved_valid=0;
 }
 static void or_mouse_draw(void){
     if(!or_mouse_available || !graphics_ready)return;
     volatile u32 *fb=(volatile u32*)boot->framebuffer;
-    for(u32 dy=0;dy<17;dy++)for(u32 dx=0;dx<11;dx++){
+    for(u32 dy=0;dy<OR_CURSOR_H;dy++)for(u32 dx=0;dx<OR_CURSOR_W;dx++){
         u32 x=or_mouse_x+dx,y=or_mouse_y+dy;
         if(x>=boot->width||y>=boot->height)continue;
         u64 off=(u64)y*boot->stride+x;
-        or_mouse_under[dy*11+dx]=fb[off];
-        if((dx<=dy/2 && dy<=13) || (dx>=3&&dx<=5&&dy>8)){
-            fb[off]=rgb(dx==0 || dx==dy/2?0x132029:0xffffff);
-        }
+        or_mouse_under[dy*OR_CURSOR_W+dx]=fb[off];
+        char pixel=or_cursor_shape[dy][dx];
+        if(pixel=='X')fb[off]=rgb(0x111820);
+        else if(pixel=='W')fb[off]=rgb(0xf7f9fc);
     }
     or_mouse_saved_valid=1;
 }
@@ -463,7 +536,7 @@ static void or_mouse_click(void){
     u32 y=(u32)((u64)or_mouse_y*720/boot->height);
     if(or_state==OR_SPLASH)return;
     if((or_state==OR_SETUP_NAME||or_state==OR_SETUP_PIN)
-       &&x>=405&&x<=867&&y>=470&&y<=514){
+       &&x>=405&&x<=867&&y>=490&&y<=542){
         or_input('\n');return;
     }
     if(or_state==OR_LOGIN){
@@ -475,7 +548,7 @@ static void or_mouse_click(void){
     if(x>=90&&x<=397&&y>=557&&y<=606){or_input('l');return;}
     if(x>=100&&x<=188&&y>=299&&y<=380){or_input('f');return;}
     if(x>=100&&x<=188&&y>=405&&y<=487){or_input('s');return;}
-    if(x<=100&&y>=670){or_input('m');return;}
+    if(((x>=390&&x<=458)||x<=100)&&y>=670){or_input('m');return;}
     if(x>=1170&&y>=170&&y<=221){or_input('m');return;}
 }
 static void or_mouse_feed(u8 data){
@@ -499,6 +572,22 @@ static void or_mouse_feed(u8 data){
     if(or_dirty)or_draw();
     else or_mouse_draw();
 }
+static int or_mouse_aux_ack(u8 value){
+    if(!ps2_wait())return 0;
+    outb(0x64,0xd4);
+    if(!ps2_wait())return 0;
+    outb(0x60,value);
+    for(u32 i=0;i<200000;i++){
+        u8 status=inb(0x64);
+        if(status&1U){
+            u8 reply=inb(0x60);
+            if((status&0x20U)&&reply==0xfa)return 1;
+            if((status&0x20U)&&reply==0xfe)return 0;
+        }
+        __asm__ volatile("pause");
+    }
+    return 0;
+}
 static int or_mouse_init(void){
     /* PS2 port 2, polled: no production IRQ routing or composite driver. */
     for(u32 i=0;i<16&&(inb(0x64)&1);i++)(void)inb(0x60);
@@ -514,15 +603,10 @@ static int or_mouse_init(void){
     outb(0x64,0x60);
     if(!ps2_wait())return 0;
     outb(0x60,cfg);
-    if(!ps2_wait())return 0;
-    outb(0x64,0xd4);
-    if(!ps2_wait())return 0;
-    outb(0x60,0xf4); /* Enable mouse stream; expect AUX ACK 0xFA */
-    for(u32 i=0;i<200000;i++){
-        u8 status=inb(0x64);
-        if(status&1){
-            u8 b=inb(0x60);
-            if((status&0x20U)&&b==0xfa){
+    /* Ask for the highest standard PS/2 reporting rate. If an older device
+     * rejects it, streaming still starts at its default rate. */
+    int high_rate=or_mouse_aux_ack(0xf3)&&or_mouse_aux_ack(200);
+    if(or_mouse_aux_ack(0xf4)){ /* Enable mouse stream. */
                 or_mouse_x=boot->width/2;or_mouse_y=boot->height/2;
                 /* IRQ12: unmask AUX controller, slave PIC IRQ4 and master cascade.
                  * The interrupt reads bytes into a ring and wakes the HLT loop. */
@@ -534,11 +618,9 @@ static int or_mouse_init(void){
                 outb(0xa1,inb(0xa1)&~0x10U);
                 outb(0x21,inb(0x21)&~0x04U);
                 or_mouse_available=1;
+                serial(high_rate?"ORBIS_MOUSE_RATE_HZ=200\r\n":"ORBIS_MOUSE_RATE_HZ=default\r\n");
                 serial("ORBIS_MOUSE_IRQ12_READY\r\nORBIS_MOUSE_READY\r\n");
                 return 1;
-            }
-        }
-        __asm__ volatile("pause");
     }
     serial("ORBIS_MOUSE_UNAVAILABLE\r\n");
     return 0;
@@ -576,7 +658,15 @@ __attribute__((noreturn)) static void orbis_gui_run(void){
             or_goto(OR_SETUP_NAME,"ORBIS_SETUP_READY\r\n");
         if(c)or_input(c);
         if(or_dirty)or_draw();
-        if(!c&&!serial_byte)__asm__ volatile("hlt":::"memory");
+        /* Recheck the ring with interrupts masked, then enable+sleep as one
+         * sequence. This drains queued packets immediately and closes the
+         * lost-wakeup window between the empty test and HLT. */
+        if(!c&&!serial_byte){
+            __asm__ volatile("cli":::"memory");
+            int mouse_empty=or_ps2_rd==or_ps2_wr;
+            if(mouse_empty)__asm__ volatile("sti;hlt":::"memory");
+            else __asm__ volatile("sti":::"memory");
+        }
     }
 }
 #endif

@@ -10,8 +10,10 @@ $builder=[System.Text.StringBuilder]::new()
 [void]$builder.AppendLine('#ifndef ORBIS_PREVIEW_FONT_H')
 [void]$builder.AppendLine('#define ORBIS_PREVIEW_FONT_H')
 $faces=@(
-  @{id='body';width=24;height=28;point=17;bold=$false},
-  @{id='display';width=43;height=46;point=31;bold=$true}
+  # The framebuffer UI is designed around a restrained 15 px reading face.
+  # The old 17/31 px pair made every label compete with the page heading.
+  @{id='body';width=22;height=25;point=15;bold=$false},
+  @{id='display';width=40;height=42;point=28;bold=$false}
 )
 foreach($face in $faces){
   $W=[int]$face.width;$H=[int]$face.height

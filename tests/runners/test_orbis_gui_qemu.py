@@ -93,6 +93,7 @@ with (build/(tag+'-stderr.log')).open('wb') as log:
         checks.append('Explicit guest demo session without password')
         assert 'ORBIS_MOUSE_READY' in output
         assert 'ORBIS_MOUSE_IRQ12_READY' in output, 'PS/2 IRQ12 not configured'
+        assert 'ORBIS_MOUSE_RATE_HZ=200' in output, 'PS/2 high-rate reporting not configured'
         # QMP input reaches the emulated i8042 AUX/PS2 mouse, not a host GUI.
         def move(axis,value):
             execute('input-send-event',{'events':[{'type':'rel','data':{'axis':axis,'value':value}}]})
